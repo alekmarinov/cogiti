@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Run cogiti from a checkout, without installing it.
+
+    bin/cogiti --agent-adapter='...' --output=text
+
+Every flag is a config key with dashes for underscores; `--print-config` shows
+the whole set and who decided each one. See `src/cogiti/config.py`.
+
+This exists because the alternative people actually reach for is
+`PYTHONPATH=src python3 -m cogiti.main`, and a PYTHONPATH in a command line
+has a way of ending up in a service file, where it silently decides what a
+child process imports.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "src"))
+
+from cogiti.main import main                                 # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

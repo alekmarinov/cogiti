@@ -176,14 +176,19 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="cogiti", add_help=False)
     ap.add_argument("--print-config", action="store_true")
     ap.add_argument("--help", "-h", action="store_true")
+    # Where the config file is, which cannot itself come from the config file.
+    # /etc/cogiti.conf is the appliance's; a checkout needs to name its own,
+    # and the alternative is a pile of flags that drift from what ships.
+    ap.add_argument("--conf", default="/etc/cogiti.conf")
     known, rest = ap.parse_known_args(argv)
 
     if known.help:
         print(__doc__.strip())
-        print("\n  --print-config   every setting, and who decided it")
+        print("\n  --conf PATH      the config file, default /etc/cogiti.conf")
+        print("  --print-config   every setting, and who decided it")
         return 0
 
-    cfg = _config.load(rest)
+    cfg = _config.load(rest, conf_path=known.conf)
     if known.print_config:
         cfg.print_config()
         return 0
