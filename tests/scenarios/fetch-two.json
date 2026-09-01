@@ -1,0 +1,10 @@
+{
+  "capabilities": {"tools": true, "questions": true, "streaming": true},
+  "steps": [
+    {"emit": {"type": "thought", "text": "fetching both"}},
+    {"emit": {"type": "tool", "id": "t1", "name": "http", "args": {"url": "http://127.0.0.1:{PORT}/one"}}},
+    {"emit": {"type": "tool", "id": "t2", "name": "http", "args": {"url": "http://127.0.0.1:{PORT}/two"}}},
+    {"await": ["t1", "t2"]},
+    {"emit": {"type": "result", "say": "both fetched"}}
+  ]
+}

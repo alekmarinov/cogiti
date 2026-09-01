@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"emit": {"type": "tool", "id": "t1", "name": "http", "args": {"url": "http://evil.example/x"}}},
+    {"await": ["t1"]},
+    {"emit": {"type": "result", "say": "refused as expected"}}
+  ]
+}

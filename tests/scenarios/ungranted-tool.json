@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"emit": {"type": "tool", "id": "t1", "name": "shell", "args": {"cmd": "rm -rf /"}}},
+    {"await": ["t1"]},
+    {"emit": {"type": "result", "say": "no channel for that"}}
+  ]
+}
