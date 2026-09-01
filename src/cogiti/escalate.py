@@ -8,6 +8,7 @@ Tools and hosts are decided here, before the job starts, from what the user
 asked for — never widened later because something the agent read suggested it.
 """
 
+from . import secrets
 from .adapters import agent
 
 
@@ -33,8 +34,17 @@ async def run(cogiti, session, turn):
     prompt = {"text": turn.text, "context": session.context()}
     budget = {"wall_ms": 120000}
 
+    # The adapter's environment carries whatever credential it was granted; a
+    # tool's carries none. Both are built, never inherited — a tool has no
+    # business holding the key that talks to the model, and inheriting would
+    # hand it every one cogiti's own shell happened to export.
+    state = cogiti.config["state_dir"]
+    env = secrets.env_for(state, cogiti.config.secret_grants())
+    tool_env = secrets.env_for(state, {})
+
     run = agent.AgentRun(cogiti.db, cogiti.agent_argv, "%s/%s" % session.key,
-                         on_event=lambda e: cogiti.trace.event(session, turn, e))
+                         on_event=lambda e: cogiti.trace.event(session, turn, e),
+                         env=env, tool_env=tool_env)
 
     # A question from the adapter is a question for the person, now that there
     # is one. The broker answered 'nobody available' while cogiti had no user

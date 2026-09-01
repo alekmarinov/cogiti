@@ -30,9 +30,15 @@ class ProtocolError(Exception):
 class AgentRun:
     """One escalation: one adapter process, its tool jobs, and their results."""
 
-    def __init__(self, db, argv, session_id, on_event=None):
+    def __init__(self, db, argv, session_id, on_event=None, env=None,
+                 tool_env=None):
         self.db = db
         self.argv = argv
+        # Explicit, never inherited. security.md §2: injected at spawn, only
+        # the granted ones. The adapter's env may carry a credential; a tool's
+        # must not, unless that tool was granted one of its own.
+        self.env = env
+        self.tool_env = tool_env
         self.session_id = session_id
         self.on_event = on_event or (lambda e: None)
         self.job_id = None
@@ -58,6 +64,7 @@ class AgentRun:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,        # its own group; cancel signals it
+            env=self.env,
         )
         _db.set_pgid(self.db, self.job_id, os.getpgid(self.proc.pid))
 
@@ -217,7 +224,8 @@ class AgentRun:
                        parent_job=self.job_id)
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, start_new_session=True)
+            stderr=asyncio.subprocess.PIPE, start_new_session=True,
+            env=self.tool_env)
         _db.set_pgid(self.db, tool_id, os.getpgid(proc.pid))
         out, err = await proc.communicate()
         if err:

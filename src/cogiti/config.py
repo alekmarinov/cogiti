@@ -42,6 +42,12 @@ DEFAULTS = {
     "egress_hosts":  "",
 
     "trace_file":    "",          # empty: stderr
+
+    # What the agent adapter is given, as `ENV_VAR=secret.name` pairs. Which
+    # variable a program wants is that program's business; the store only knows
+    # names. Empty means the adapter is spawned with no credential at all,
+    # which is correct for a local model and for the fake.
+    "agent_secrets": "",
 }
 
 # Settings naming a path that must exist if set. state_dir is created rather
@@ -65,6 +71,17 @@ class Config:
 
     def origin(self, key):
         return self._origin.get(key, "unset")
+
+    def secret_grants(self):
+        """{"ANTHROPIC_API_KEY": "anthropic.api_key"} from `agent_secrets`."""
+        out = {}
+        for pair in self.list("agent_secrets"):
+            if "=" not in pair:
+                raise ConfigError(
+                    "agent_secrets entry %r is not ENV_VAR=secret.name" % pair)
+            var, name = (p.strip() for p in pair.split("=", 1))
+            out[var] = name
+        return out
 
     def list(self, key):
         raw = self._v.get(key, "")
