@@ -42,6 +42,8 @@ so a scenario reads as the thing it is testing:
 
     {"wait_ms": 50}              pause
     {"await": ["t1"]}            block until those ids are answered
+    {"report": ["t1"]}           await them, then emit a result carrying each
+                                 answer verbatim in `did`
     {"emit": {...}}              one message; "v" defaults to 1, give it to override
     {"emit_raw": "{ not json"}   unparseable, on purpose
     {"ignore_sigterm": true}     from here on, SIGTERM does nothing
@@ -168,6 +170,17 @@ def run_steps(steps, inbox):
 
         elif "await" in step:
             inbox.wait_for(step["await"])
+
+        elif "report" in step:
+            # Await those ids and then say what actually came back, so a test
+            # can assert on the tool_result rather than merely on the fact that
+            # one arrived. Without this the fake can only tell you an answer
+            # existed — which is how a broker reporting ok:true for a tool that
+            # never ran went unnoticed until a real model complained the page
+            # was blank.
+            got = inbox.wait_for(step["report"])
+            emit({"v": V, "type": "result", "say": "reported",
+                  "did": [json.dumps(a, sort_keys=True) for a in got]})
 
         elif "emit" in step:
             msg = dict(step["emit"])

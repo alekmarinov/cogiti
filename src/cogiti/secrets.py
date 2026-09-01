@@ -69,8 +69,11 @@ def env_for(state_dir, grants):
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": os.environ.get("HOME", "/"),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
-        # Python needs this to find cogiti.tools.http when spawned as -m.
-        "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+        # No PYTHONPATH. It was here so a tool spawned as `-m cogiti.tools.http`
+        # could find itself; tools are now spawned by absolute path, so the
+        # only thing it still does is let whatever the parent shell exported
+        # decide what a child imports — which is the inheritance this function
+        # exists to prevent.
     }
     for var, name in (grants or {}).items():
         env[var] = get(state_dir, name)

@@ -105,7 +105,7 @@ class TestRedirect(Base):
     async def test_a_redirect_is_returned_not_followed(self):
         """The egress check ran against the first url. Following a 302 to a
         private address would land somewhere it never checked."""
-        from cogiti.tools import http
+        from cogiti.tools import http_fetch as http
         r = http.fetch("http://127.0.0.1:%d/redirect" % PORT)
         self.assertEqual(r["status"], 302)
         self.assertEqual(r.get("redirected_to"), "http://192.168.1.1/secret")
@@ -131,6 +131,66 @@ class TestProtocolFailures(Base):
         self.assertEqual(res["type"], "failed")
         self.assertEqual(res["kind"], "protocol")
         self.assertEqual(D.get_job(self.db, run.job_id)["state"], "failed")
+
+
+
+
+class TestBrokenTool(Base):
+    """A tool that cannot run must not look like a tool that found nothing.
+
+    Found against a real model: the tool failed to start, wrote nothing to
+    stdout, and the broker turned that into `ok: true` with an empty value.
+    The model was told the page was blank — so it answered from memory, about a
+    page it had never fetched, and said so confidently. A tool that fails must
+    fail loudly enough for the agent to know it did.
+    """
+
+    def broken_runner(self, argv):
+        """Replace the http runner for the duration of one test."""
+        saved = dict(agent.TOOL_RUNNERS)
+        agent.TOOL_RUNNERS["http"] = argv
+        self.addCleanup(lambda: agent.TOOL_RUNNERS.update(saved))
+
+    async def answer_for(self, res):
+        self.assertEqual(res["type"], "result")
+        return json.loads(res["did"][0])
+
+    async def test_a_tool_that_writes_nothing_is_an_error_not_an_empty_result(self):
+        self.broken_runner([sys.executable, "-c", "raise SystemExit(1)"])
+        res, _ = await self.escalate("report-one-fetch.json",
+                                     [{"name": "http", "hosts": ["127.0.0.1"]}])
+        answer = await self.answer_for(res)
+        self.assertFalse(answer["ok"], "a crashed tool reported as a success")
+
+    async def test_the_reason_reaches_the_agent(self):
+        """Not just 'it failed' — an agent that is told why can try something
+        else, and the trace records something a person can act on."""
+        self.broken_runner([sys.executable, "-c",
+                            "import sys; print('boom', file=sys.stderr); raise SystemExit(2)"])
+        res, _ = await self.escalate("report-one-fetch.json",
+                                     [{"name": "http", "hosts": ["127.0.0.1"]}])
+        answer = await self.answer_for(res)
+        self.assertFalse(answer["ok"])
+        self.assertIn("boom", answer["error"]["message"])
+
+    async def test_non_json_output_is_an_error_carrying_what_was_written(self):
+        self.broken_runner([sys.executable, "-c", "print('<html>not json</html>')"])
+        res, _ = await self.escalate("report-one-fetch.json",
+                                     [{"name": "http", "hosts": ["127.0.0.1"]}])
+        answer = await self.answer_for(res)
+        self.assertFalse(answer["ok"])
+        self.assertIn("not json", answer["error"]["message"])
+
+    async def test_a_nonzero_exit_with_a_real_result_is_still_a_result(self):
+        """The http tool exits 1 for a 404 or an unreachable host, and that
+        json IS the answer. Failing on the exit code alone would throw it away."""
+        self.broken_runner([sys.executable, "-c",
+                            "print('{\"ok\": false, \"status\": 404}'); raise SystemExit(1)"])
+        res, _ = await self.escalate("report-one-fetch.json",
+                                     [{"name": "http", "hosts": ["127.0.0.1"]}])
+        answer = await self.answer_for(res)
+        self.assertTrue(answer["ok"], "the broker delivered the tool's own json")
+        self.assertEqual(answer["value"]["status"], 404)
 
 
 if __name__ == "__main__":

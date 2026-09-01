@@ -6,6 +6,13 @@ cogiti has already decided the url is allowed. It does not consult the
 allowlist itself and must not: the decision belongs to the broker, and a tool
 that could decide for itself would be a second policy to keep in step.
 
+**The file is not called `http.py`, and no tool may be.** A tool is spawned by
+absolute path, which puts this directory first on `sys.path` — so a module
+named `http.py` shadows the standard library's `http` package, and `urllib`
+fails to import itself two frames into its own startup. It is called
+`http_fetch.py`; the tool is still named `http` on the wire, where the name
+costs nothing. The same goes for `json.py`, `socket.py` and `types.py`.
+
 **It does not follow redirects, deliberately.** An allowlisted url answering
 `302 Location: http://192.168.1.1/` would otherwise defeat the egress check
 entirely — the check ran against the first url and the fetch lands on the

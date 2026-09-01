@@ -18,8 +18,19 @@ from .. import db as _db
 from .. import jobs, trust
 
 V = 1
+
+# By path, not by `-m cogiti.tools.http_fetch`. A tool job is spawned with a fresh
+# environment — that is the point of secrets.env_for — so it has no PYTHONPATH
+# and `-m` finds nothing unless cogiti happens to be installed on the default
+# path. It worked when installed and failed silently in a checkout, which is
+# the worst arrangement available: the tool wrote nothing, and the agent was
+# told the fetch had succeeded and come back empty.
+#
+# The tools import nothing from cogiti, precisely so this works.
+_TOOLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "tools")
 TOOL_RUNNERS = {
-    "http": [sys.executable, "-m", "cogiti.tools.http"],
+    "http": [sys.executable, os.path.join(_TOOLS, "http_fetch.py")],
 }
 
 
@@ -228,15 +239,32 @@ class AgentRun:
             env=self.tool_env)
         _db.set_pgid(self.db, tool_id, os.getpgid(proc.pid))
         out, err = await proc.communicate()
+        err = err.decode("utf-8", "replace").strip()
         if err:
-            _db.append_log(self.db, tool_id, "err",
-                           err.decode("utf-8", "replace")[:2000])
+            _db.append_log(self.db, tool_id, "err", err[:2000])
         _db.set_state(self.db, tool_id, "done" if proc.returncode == 0 else "failed",
                       error_kind=None if proc.returncode == 0 else "tool")
+
+        # A non-zero exit is not by itself a failure to report: the http tool
+        # exits 1 for a 404 or an unreachable host, and that json IS the answer
+        # the agent needs. What must never be swallowed is stdout that is not a
+        # result — a tool that crashed, or was never found at all.
+        #
+        # This previously read `json.loads(out or "{}")`, which turned a tool
+        # that failed to start into an empty but *successful* fetch. The agent
+        # was told the page was blank rather than that nothing had been
+        # fetched, and answered accordingly: confidently, from memory, about a
+        # page it had never seen. Measured against a real model, not imagined.
+        text = out.decode("utf-8", "replace").strip()
+        if not text:
+            raise ProtocolError(
+                "tool %s wrote no result (exit %s)%s"
+                % (name, proc.returncode, ": " + err[:300] if err else ""))
         try:
-            return json.loads(out.decode("utf-8", "replace") or "{}")
+            return json.loads(text)
         except ValueError:
-            raise ProtocolError("tool %s did not return json" % name)
+            raise ProtocolError("tool %s did not return json: %r"
+                                % (name, text[:200]))
 
     # --------------------------------------------------------------- io --
 

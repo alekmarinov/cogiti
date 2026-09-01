@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"emit": {"type": "tool", "id": "t1", "name": "http", "args": {"url": "http://127.0.0.1:{PORT}/ok"}}},
+    {"report": ["t1"]}
+  ]
+}
