@@ -52,7 +52,13 @@ DEFAULTS = {
 
 # Settings naming a path that must exist if set. state_dir is created rather
 # than required — it is ours to make — so it is not here.
-MUST_EXIST = ("agent_adapter_binary", "presentation_adapter", "speech_adapter")
+# A path that must exist if set. `presentation_adapter` is deliberately NOT
+# here: it names a socket, and the renderer is a separate process with its own
+# lifetime. Requiring the socket at startup would mean cogiti could not be
+# started before the face — and the port requires it to survive the face going
+# away and coming back, which makes "absent right now" a normal state rather
+# than a configuration error.
+MUST_EXIST = ("agent_adapter_binary", "speech_adapter")
 
 
 class ConfigError(Exception):

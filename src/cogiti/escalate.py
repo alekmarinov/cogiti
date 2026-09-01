@@ -42,9 +42,19 @@ async def run(cogiti, session, turn):
     env = secrets.env_for(state, cogiti.config.secret_grants())
     tool_env = secrets.env_for(state, {})
 
+    def on_event(e):
+        cogiti.trace.event(session, turn, e)
+        # A thought is the only agent event with somewhere to go on a screen.
+        # Routed here rather than inside the adapter because what is worth
+        # showing is a presentation decision, and the adapter must not have
+        # one.
+        if e.get("type") == "thought":
+            hook = getattr(cogiti.output, "on_thought", None)
+            if hook:
+                hook(e.get("text", ""))
+
     run = agent.AgentRun(cogiti.db, cogiti.agent_argv, "%s/%s" % session.key,
-                         on_event=lambda e: cogiti.trace.event(session, turn, e),
-                         env=env, tool_env=tool_env)
+                         on_event=on_event, env=env, tool_env=tool_env)
 
     # A question from the adapter is a question for the person, now that there
     # is one. The broker answered 'nobody available' while cogiti had no user

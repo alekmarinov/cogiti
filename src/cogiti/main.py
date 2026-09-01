@@ -14,7 +14,9 @@ import sys
 from . import config as _config
 from . import db as _db
 from . import jobs
-from .adapters import agent
+from .adapters import agent, presentation
+from . import present
+from . import speech as speech_mod
 from .session import Session
 from .trace import Trace
 
@@ -28,7 +30,7 @@ class TextOutput:
     'no way to reach the user' stays a startup failure rather than a surprise.
     """
 
-    def say(self, result):
+    async def say(self, result):
         if result is None:
             return ""
         if result.get("type") == "failed":
@@ -44,11 +46,61 @@ class TextOutput:
         return text
 
 
+class FaceOutput:
+    """A result reaches the person through the presentation and speech ports.
+
+    The two are used together but stay separable, which is the point of them
+    being two ports: `say` is what is heard, `show` is what is drawn, and an
+    adapter may be missing without the other stopping. With no speech adapter
+    the face shows the answer silently; with no presentation adapter it is
+    spoken and nothing is drawn.
+    """
+
+    def __init__(self, presenter, speech=None, echo=False):
+        self.p = presenter
+        self.speech = speech
+        self.echo = echo            # also print, for a workstation with no ears
+
+    async def say(self, result):
+        if result is None:
+            return ""
+        if result.get("type") == "failed":
+            text = "I couldn't do that: %s" % (result.get("message")
+                                               or result.get("kind"))
+        else:
+            text = result.get("say", "")
+
+        self.p.result(result)
+        marks = await self.speech.marks(text) if self.speech else None
+        if marks:
+            self.p.speak(marks)
+        if self.echo or not (marks or self.p.a.connected):
+            # Never silently succeed at nothing: if neither port took it, it
+            # still has to go somewhere a person can see.
+            print(text, flush=True)
+        return text
+
+    def on_state(self, state):
+        """The face is a status display for the turn, not a printer that runs
+        once at the end — architecture.md §3."""
+        if state == "resolving":
+            self.p.busy(True)
+            self.p.expression("listening")
+        elif state == "thinking":
+            self.p.expression("thinking")
+        elif state == "idle":
+            self.p.busy(False)
+            self.p.idle()
+
+    def on_thought(self, text):
+        self.p.thought(text)
+
+
 class Cogiti:
     def __init__(self, cfg):
         self.config = cfg
         self.output_kind = _config.require_output(cfg)
-        self.output = TextOutput()
+        self.output = self._build_output(cfg)
 
         state = cfg["state_dir"]
         os.makedirs(state, exist_ok=True)
@@ -63,6 +115,21 @@ class Cogiti:
                 "which model runs.")
 
         self.sessions = {}
+
+    def _build_output(self, cfg):
+        """Which ports actually answer. `output = text` stays a legitimate
+        choice rather than a fallback, so 'no way to reach the user' remains a
+        startup failure and never a surprise."""
+        socket_path = cfg["presentation_adapter"]
+        speech_argv = cfg["speech_adapter"].split()
+        if not socket_path and not speech_argv:
+            return TextOutput()
+
+        warn = lambda m: print("(%s)" % m, file=sys.stderr, flush=True)
+        adapter = presentation.Presentation(socket_path, on_warn=warn)
+        speech = speech_mod.Speech(speech_argv, on_warn=warn) if speech_argv else None
+        return FaceOutput(present.Presenter(adapter), speech,
+                          echo=(cfg["output"] == "text"))
 
     async def start(self):
         # Orphan recovery before anything else runs, so the table never claims

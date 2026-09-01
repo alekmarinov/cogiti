@@ -120,7 +120,17 @@ class TestConfig(unittest.TestCase):
 
     def test_a_named_path_that_does_not_exist_stops_startup(self):
         with self.assertRaises(C.ConfigError):
-            C.load(["--presentation-adapter=/no/such/thing"], conf_path="/nonexistent")
+            C.load(["--speech-adapter=/no/such/thing"], conf_path="/nonexistent")
+
+    def test_a_presentation_socket_that_is_not_there_yet_is_not_an_error(self):
+        """It names a socket, not a program. The renderer is a separate
+        process with its own lifetime, and the port requires cogiti to survive
+        it going away and coming back — so 'absent right now' is a normal
+        state, and refusing to start would mean cogiti could never be started
+        before the face."""
+        cfg = C.load(["--presentation-adapter=/no/such/socket"],
+                     conf_path="/nonexistent")
+        self.assertEqual(cfg["presentation_adapter"], "/no/such/socket")
 
 
 if __name__ == "__main__":

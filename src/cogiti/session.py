@@ -28,6 +28,11 @@ class Session:
 
     def on_state(self, turn, state):
         self.cogiti.trace.state(self, turn, state)
+        # The face follows the turn, not the answer. An output that has no
+        # opinion about states simply does not implement this.
+        hook = getattr(self.cogiti.output, "on_state", None)
+        if hook:
+            hook(state.value)
 
     # ------------------------------------------------------------- input --
 
@@ -75,7 +80,7 @@ class Session:
 
         turn.result = result
         turn.to(State.SPEAKING)
-        said = self.cogiti.output.say(result)
+        said = await self.cogiti.output.say(result)
         self.history.append((turn.text, said))
         del self.history[:-HISTORY]
         turn.to(State.IDLE)
