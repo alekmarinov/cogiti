@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"emit": {"type": "thought", "text": "thinking hard"}},
+    {"wait_ms": 3000},
+    {"emit": {"type": "result", "say": "finished"}}
+  ]
+}

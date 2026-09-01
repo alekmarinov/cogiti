@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"emit": {"type": "question", "id": "q1", "ask": "which repository?", "expects": "text"}},
+    {"await": ["q1"]},
+    {"emit": {"type": "result", "say": "looked at the one you named"}}
+  ]
+}

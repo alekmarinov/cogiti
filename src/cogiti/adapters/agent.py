@@ -67,6 +67,14 @@ class AgentRun:
         stderr = asyncio.create_task(self._drain_stderr())
         try:
             terminal = await self._read_events()
+        except asyncio.CancelledError:
+            # Cancelling the task does not cancel the process. Without this the
+            # adapter keeps running after an interruption — still brokering
+            # tools, still spending a budget, eventually writing a result into
+            # a pipe nobody reads. jobs.cancel signals the group, which reaches
+            # its tool jobs too, because they are groups under this one.
+            jobs.cancel(self.db, self.job_id, "interrupted")
+            raise
         finally:
             stderr.cancel()
             for t in list(self._tools):
@@ -97,16 +105,21 @@ class AgentRun:
                 _db.append_log(self.db, self.job_id, "event",
                                "%s %s" % (kind, msg.get("text") or msg.get("note", "")))
             elif kind == "tool":
+                # Traced before brokering. Without this the trace records no
+                # tools at all, and "why did it do that" — the only question
+                # the trace exists to answer — cannot be answered for the
+                # events that actually reach the network.
+                self.on_event(msg)
                 # Not awaited: several may be outstanding, and answers go back
                 # in whatever order the work finishes.
                 self._tools.add(asyncio.create_task(self._broker(msg)))
             elif kind == "question":
-                # Slice 2 has nobody to ask. Answered as unavailable rather
-                # than left hanging, because a pending question with no
-                # deadline is jobs.md failure mode 4.
-                await self._send({"type": "answer", "id": msg["id"],
-                                  "value": None,
-                                  "error": "no one is available to answer"})
+                # If a caller wired a person in, ask them; otherwise say so
+                # rather than leaving the adapter waiting on an answer that is
+                # never coming — a pending question with no deadline is
+                # jobs.md failure mode 4.
+                self.on_event(msg)
+                self._tools.add(asyncio.create_task(self._ask(msg)))
             elif kind == "result":
                 _db.set_state(self.db, self.job_id, "done",
                               result_json=json.dumps(msg))
@@ -176,6 +189,24 @@ class AgentRun:
         except Exception as e:                                # noqa: BLE001
             await self._send({"type": "tool_result", "id": tid, "ok": False,
                               "error": {"kind": "tool", "message": str(e)}})
+
+    async def _ask(self, msg):
+        """Put the agent's question to whoever is listening."""
+        asker = getattr(self, "ask_user", None)
+        if asker is None:
+            await self._send({"type": "answer", "id": msg["id"], "value": None,
+                              "error": "no one is available to answer"})
+            return
+        try:
+            _db.set_state(self.db, self.job_id, "needs-input")
+            value = await asker(msg)
+            _db.set_state(self.db, self.job_id, "running")
+            await self._send({"type": "answer", "id": msg["id"], "value": value})
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:                                # noqa: BLE001
+            await self._send({"type": "answer", "id": msg["id"], "value": None,
+                              "error": str(e)})
 
     async def _run_tool_job(self, name, argv):
         """A tool is a job: its own row, its own process group, cancellable
