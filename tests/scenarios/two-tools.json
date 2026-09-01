@@ -1,0 +1,10 @@
+{
+  "capabilities": {"tools": true, "questions": true, "streaming": true},
+  "steps": [
+    {"emit": {"type": "thought", "text": "checking both sources"}},
+    {"emit": {"type": "tool", "id": "t1", "name": "http", "args": {"url": "https://api.coingecko.com/x"}}},
+    {"emit": {"type": "tool", "id": "t2", "name": "http", "args": {"url": "https://api.kraken.com/x"}}},
+    {"await": ["t1", "t2"]},
+    {"emit": {"type": "result", "say": "about 2,400 dollars", "did": [{"tool": "http"}]}}
+  ]
+}

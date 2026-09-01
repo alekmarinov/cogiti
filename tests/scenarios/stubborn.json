@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"ignore_sigterm": true},
+    {"spawn_grandchild": true},
+    {"emit": {"type": "thought", "text": "I am not going to stop"}},
+    {"sleep_forever": true}
+  ]
+}
