@@ -93,6 +93,27 @@ class Turn:
     YES = frozenset(("yes", "yeah", "yep", "yes please", "go ahead", "do it",
                      "confirm", "ok", "okay", "sure"))
 
+    #: Words that abandon whatever was asked. "Cancel" and "never mind" always
+    #: leave — a question must never be a trap the user has to answer to escape.
+    ABANDON = frozenset(("cancel", "never mind", "nevermind", "forget it",
+                         "stop", "no", "nothing", "leave it", "don't"))
+
+    async def _ask(self, question, state, timeout_s):
+        """Put a question and wait for the next thing said. None if nothing was.
+
+        Shared by `confirm` and `ask_slot` because the waiting is identical and
+        the difference is only what the answer means.
+        """
+        self.question = question
+        self._answer = asyncio.Future()
+        self.to(state)
+        try:
+            return await asyncio.wait_for(asyncio.shield(self._answer), timeout_s)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return None
+        finally:
+            self.question = None
+
     async def confirm(self, question, timeout_s=30.0):
         """Ask, and wait. Returns True only for an explicit yes.
 
@@ -101,16 +122,24 @@ class Turn:
         one-line change someone will eventually make to smooth over an awkward
         pause, and the thing on the other side of it is `power_off`.
         """
-        self.question = question
-        self._answer = asyncio.Future()
-        self.to(State.CONFIRMING)
-        try:
-            said = await asyncio.wait_for(asyncio.shield(self._answer), timeout_s)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        said = await self._ask(question, State.CONFIRMING, timeout_s)
+        if said is None:
             return False
-        finally:
-            self.question = None
         return str(said).strip().lower().rstrip(".!") in self.YES
+
+    async def ask_slot(self, question, timeout_s=30.0):
+        """Ask for one missing slot. Returns what was said, or None to abandon.
+
+        Unlike a confirm, the answer is not a word from a list — it is whatever
+        the person said, handed back to the resolver. The only thing read here
+        is whether they wanted out.
+        """
+        said = await self._ask(question, State.NEEDS_INPUT, timeout_s)
+        if said is None:
+            return None
+        if str(said).strip().lower().rstrip(".!") in self.ABANDON:
+            return None
+        return str(said).strip()
 
     # --------------------------------------------------------- interrupt --
 

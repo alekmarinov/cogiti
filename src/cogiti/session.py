@@ -15,6 +15,10 @@ import asyncio
 from . import escalate
 from .turn import State, Turn
 
+#: Returned by _fill_slot when the person asked to drop it. A distinct
+#: object rather than None, which already means "nothing was filled, escalate".
+CANCELLED = object()
+
 UNKNOWN_SPEAKER = "unknown"     # no perception adapter, so nobody is identified
 HISTORY = 6                     # turns of context an escalation is given
 
@@ -121,9 +125,25 @@ class Session:
           not built yet, so for now it escalates — with the intent recorded,
           which is the difference between a gap and a bug.
         """
-        if decision is None or decision.verdict == "escalate":
+        if decision is None:
             return None
-        cmd = self.cogiti.table.get(decision.intent_id) if self.cogiti.table else None
+        table = self.cogiti.table
+
+        # reflexi recognised the intent but a required slot was empty, and it
+        # hands back both. That is the one escalation that arrives knowing what
+        # it wants — so ask for it rather than paying a model to.
+        if decision.missing_slot and decision.intent_id and table:
+            filled = await self._fill_slot(turn, decision)
+            if filled is CANCELLED:
+                return {"type": "result", "say": "Never mind, then.",
+                        "did": ["asked, and was told to drop it"]}
+            if filled is not None:
+                decision = filled
+                turn.decision = decision
+
+        if decision.verdict == "escalate":
+            return None
+        cmd = table.get(decision.intent_id) if table else None
         if cmd is None:
             return None
 
@@ -141,6 +161,44 @@ class Session:
 
         turn.to(State.ACTING)
         return await self.cogiti.run_command(cmd, decision)
+
+    async def _fill_slot(self, turn, decision):
+        """Ask for the one slot that was missing, and resolve again.
+
+        The answer is **not** resolved on its own. Measured against reflexi:
+        a bare "make it 20 minutes" answering "a timer for how long?" resolves
+        to `volume_down` with a confirm verdict, and "ten" and "for 20 minutes"
+        resolve to nothing at all. Appended to what was originally said, all
+        three come back as `set_timer` with the right duration, because the
+        resolver is then reading a sentence rather than a fragment.
+
+        Two guards, and the first is the one that matters:
+
+        **The new decision is only accepted if it is the same intent.** A
+        follow-up must not be able to change what is being done — that is how
+        an answer about a timer turns into a volume change, and one day into
+        something worse.
+
+        **The slot must actually be filled**, or nothing was gained and it
+        escalates as it would have anyway.
+        """
+        cmd = self.cogiti.table.get(decision.intent_id)
+        if cmd is None:
+            return None
+        question = cmd.ask_for(decision.missing_slot)
+        if not question:
+            return None
+
+        said = await turn.ask_slot(question)
+        if said is None:
+            return CANCELLED
+
+        again = self.cogiti.resolve("%s %s" % (turn.text, said))
+        if (again is not None
+                and again.intent_id == decision.intent_id
+                and not again.missing_slot):
+            return again
+        return None
 
     # ----------------------------------------------------------- context --
 

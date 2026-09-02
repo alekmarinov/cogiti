@@ -67,6 +67,18 @@ class Command:
         self.command = spec.get("command")
         self.source = spec.get("source")
 
+    def ask_for(self, slot_name):
+        """The wording for a missing slot, or None if the table has none.
+
+        No wording means no asking: an intent whose table entry never says how
+        to ask for `duration` escalates instead, which is a gap the author can
+        close by adding a sentence rather than a behaviour cogiti invents.
+        """
+        for name, spec in self.args.items():
+            if spec.get("slot", name) == slot_name:
+                return spec.get("ask")
+        return None
+
     def bind(self, decision):
         """Resolver slots -> provider arguments, with defaulting made explicit.
 

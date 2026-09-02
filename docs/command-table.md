@@ -140,6 +140,39 @@ it says it cannot. This is per command because the right answer differs: a
 stale temperature is useful, a stale stock price is a hazard, and the device
 should not decide that for itself at runtime.
 
+## Asking for a missing slot
+
+reflexi escalates when a required slot is empty — but it escalates *carrying
+the intent and the name of the slot*. That is the one escalation that already
+knows what it wants, so the table says how to ask:
+
+```toml
+  [set_volume.args]
+  level = { slot = "level", required = true, ask = "What level? Nought to a hundred." }
+```
+
+No `ask` means no asking: the intent escalates to the model as it would have.
+A gap in the table is then a sentence someone can add, not a behaviour cogiti
+invents.
+
+**The answer is never resolved on its own.** It is appended to what was
+originally said and the whole sentence goes back through the resolver. Measured
+against reflexi, a bare "make it 20 minutes" answering "a timer for how long?"
+resolves to `volume_down`; "ten" and "for 20 minutes" resolve to nothing. As
+`set a timer make it 20 minutes` all three come back correctly, because the
+resolver is reading a sentence rather than a fragment.
+
+Two guards on the result, and the first is the one that matters:
+
+- **The same intent, or nothing.** A follow-up must not be able to change what
+  is being done. That is how an answer about a timer becomes a volume change,
+  and one day something worse.
+- **The slot must actually be filled**, or nothing was gained and it escalates
+  as it would have anyway.
+
+"Cancel", "never mind" and "forget it" always leave. A question is never a trap
+that has to be answered to escape.
+
 ## Confirm
 
 The resolver already decides that an intent needs confirmation, and the port
