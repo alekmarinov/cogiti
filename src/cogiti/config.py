@@ -48,6 +48,10 @@ DEFAULTS = {
     # names. Empty means the adapter is spawned with no credential at all,
     # which is correct for a local model and for the fake.
     "agent_secrets": "",
+
+    # The same, for the speech adapter. A cloud voice needs a credential and a
+    # local one needs none, and which is in use is a deployment's business.
+    "speech_secrets": "",
 }
 
 # Settings naming a path that must exist if set. state_dir is created rather
@@ -78,13 +82,14 @@ class Config:
     def origin(self, key):
         return self._origin.get(key, "unset")
 
-    def secret_grants(self):
-        """{"ANTHROPIC_API_KEY": "anthropic.api_key"} from `agent_secrets`."""
+    def secret_grants(self, key="agent_secrets"):
+        """{"ANTHROPIC_API_KEY": "anthropic.api_key"} from `agent_secrets`,
+        or from any other `*_secrets` setting."""
         out = {}
-        for pair in self.list("agent_secrets"):
+        for pair in self.list(key):
             if "=" not in pair:
                 raise ConfigError(
-                    "agent_secrets entry %r is not ENV_VAR=secret.name" % pair)
+                    "%s entry %r is not ENV_VAR=secret.name" % (key, pair))
             var, name = (p.strip() for p in pair.split("=", 1))
             out[var] = name
         return out

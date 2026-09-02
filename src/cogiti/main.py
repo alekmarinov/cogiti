@@ -17,6 +17,7 @@ from . import db as _db
 from . import jobs
 from .adapters import agent, presentation
 from . import present
+from . import secrets
 from . import speech as speech_mod
 from .session import Session
 from .trace import Trace
@@ -158,7 +159,12 @@ class Cogiti:
 
         warn = lambda m: print("(%s)" % m, file=sys.stderr, flush=True)
         adapter = presentation.Presentation(socket_path, on_warn=warn)
-        speech = speech_mod.Speech(speech_argv, on_warn=warn) if speech_argv else None
+        speech = None
+        if speech_argv:
+            speech = speech_mod.Speech(
+                speech_argv, on_warn=warn,
+                env=secrets.env_for(cfg["state_dir"],
+                                    cfg.secret_grants("speech_secrets")))
         return FaceOutput(present.Presenter(adapter), speech,
                           echo=(cfg["output"] == "text"))
 

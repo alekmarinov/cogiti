@@ -33,8 +33,13 @@ TIMEOUT_S = 20
 class Speech:
     """Synthesis, and the clock the mouth is scheduled against."""
 
-    def __init__(self, argv, lead_ms=120, on_warn=None):
+    def __init__(self, argv, lead_ms=120, on_warn=None, env=None):
         self.argv = list(argv)
+        # Explicit, never inherited — the same rule the agent adapter is held
+        # to. A cloud voice is a credential and a network call, so "whatever
+        # the shell that started cogiti happened to export" is not an
+        # acceptable answer to what this process may reach.
+        self.env = env
         # The audio is scheduled a little in the future so the trip over the
         # socket and the renderer's next frame both land before t=0. Without a
         # lead the first viseme is always already late.
@@ -59,7 +64,7 @@ class Speech:
             return None
         try:
             proc = await asyncio.create_subprocess_exec(
-                *self.argv, text,
+                *self.argv, text, env=self.env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         except OSError as e:
             self._warn("speech adapter would not start: %s" % e)
