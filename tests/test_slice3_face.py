@@ -9,7 +9,7 @@ hello handshake, a connection that can be closed underneath us — because those
 are the three things a client gets wrong.
 """
 
-import asyncio, json, os, socket, sys, tempfile, threading, unittest
+import asyncio, json, os, socket, sys, tempfile, threading, time, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from cogiti import present, speech                          # noqa: E402
@@ -60,6 +60,7 @@ class FakeRenderer:
                     if not line.strip():
                         continue
                     msg = json.loads(line)
+                    msg["_t"] = time.monotonic()   # when it actually arrived
                     self.ops.append(msg)
                     if msg.get("op") == "hello" and self.answer_hello:
                         c.sendall((json.dumps(self.caps) + "\n").encode())
@@ -251,6 +252,74 @@ class TestSpeak(Base):
         self.p.speak({"visemes": [[0.0, "AA"]], "audio_start_ns": 1})
         self.settle()
         self.assertNotIn("audio", self.r.by_op("speak")[0])
+
+
+class TestSpeakingTakesTime(unittest.IsolatedAsyncioTestCase):
+    """A turn must stay in `speaking` for as long as speaking takes.
+
+    Found by running it, not by reading it: cogiti sent `speak` and then
+    `idle` in the same millisecond, and avatari's idle handler calls
+    audio_stop() and viseme_stop() — so cogiti cancelled its own utterance
+    120 ms before it was due to start. Every individual message was correct
+    and the head never moved.
+
+    Tested through main.FaceOutput rather than the Presenter, because the
+    defect was in the *ordering* the output imposes, and a Presenter test
+    would have passed throughout.
+    """
+
+    def setUp(self):
+        from cogiti import main as _main
+        self.main = _main
+        self.r = FakeRenderer()
+        self.addCleanup(self.r.close)
+        self.a = presentation.Presentation(self.r.path)
+        self.addCleanup(self.a.close)
+
+    def output(self, seconds):
+        class FakeSpeech:
+            async def marks(self, text):
+                import time as _t
+                return {"visemes": [[0.0, "AA"], [seconds, "sil"]],
+                        "seconds": seconds, "audio": "/tmp/x.wav",
+                        "audio_start_ns":
+                            _t.clock_gettime_ns(_t.CLOCK_MONOTONIC)}
+        return self.main.FaceOutput(present.Presenter(self.a), FakeSpeech())
+
+    async def test_say_does_not_return_before_the_utterance_ends(self):
+        out = self.output(0.4)
+        t0 = asyncio.get_event_loop().time()
+        await out.say({"say": "a short line", "show": "line"})
+        self.assertGreaterEqual(asyncio.get_event_loop().time() - t0, 0.4)
+
+    async def test_idle_never_lands_while_the_mouth_is_still_moving(self):
+        """The assertion that would have caught it: idle after speak is not
+        wrong, idle *immediately* after speak is."""
+        out = self.output(0.3)
+        await out.say({"say": "hello", "show": "hello"})
+        out.on_state("idle")
+        threading.Event().wait(0.05)
+        ops = self.r.kinds()
+        self.assertIn("speak", ops)
+        self.assertIn("idle", ops)
+        self.assertLess(ops.index("speak"), ops.index("idle"))
+
+        spoke = [o for o in self.r.ops if o.get("op") == "speak"][0]
+        idled = [o for o in self.r.ops if o.get("op") == "idle"][0]
+        self.assertGreaterEqual(idled["_t"] - spoke["_t"], 0.3,
+                                "idle arrived while the utterance was playing")
+
+    async def test_an_interruption_stops_the_mouth(self):
+        """Cancelling the turn must not leave a mouth running under whatever
+        comes next. ports.md fixes the order: presentation stops first."""
+        out = self.output(5.0)
+        task = asyncio.ensure_future(out.say({"say": "a long one", "show": "x"}))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        threading.Event().wait(0.05)
+        self.assertIn("stop", self.r.kinds())
 
 
 class TestSpeechAdapter(unittest.IsolatedAsyncioTestCase):

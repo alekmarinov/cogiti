@@ -10,6 +10,7 @@ import asyncio
 import os
 import signal
 import sys
+import time
 
 from . import config as _config
 from . import db as _db
@@ -74,11 +75,41 @@ class FaceOutput:
         marks = await self.speech.marks(text) if self.speech else None
         if marks:
             self.p.speak(marks)
+            await self._until_spoken(marks)
         if self.echo or not (marks or self.p.a.connected):
             # Never silently succeed at nothing: if neither port took it, it
             # still has to go somewhere a person can see.
             print(text, flush=True)
         return text
+
+    async def _until_spoken(self, marks):
+        """Stay in `speaking` for as long as speaking takes.
+
+        Without this the turn reached `idle` in the same millisecond the
+        `speak` went out — and avatari's `idle` calls audio_stop() and
+        viseme_stop(), so cogiti was cancelling its own utterance 120 ms
+        before it was due to start. The mouth never moved and nothing was
+        heard, on a path where every individual message was correct.
+
+        Being a real wait is also what makes `speaking` a state rather than a
+        label: an interruption arriving now cancels this, which is barge-in.
+        """
+        duration = marks.get("seconds")
+        if not duration:
+            v = marks.get("visemes") or [[0.0]]
+            duration = v[-1][0]
+        start = marks.get("audio_start_ns") or 0
+        lead = max(0.0, (start - time.clock_gettime_ns(time.CLOCK_MONOTONIC)) / 1e9)
+        # The mouth releases back to the expression layer about 150 ms after
+        # the last viseme, so going idle exactly on the last mark would clip it.
+        try:
+            await asyncio.sleep(lead + duration + 0.15)
+        except asyncio.CancelledError:
+            # Barge-in, or a new question typed over the answer. Stop the mouth
+            # and the audio now rather than letting them run under whatever
+            # comes next; ports.md fixes this order.
+            self.p.stop()
+            raise
 
     def on_state(self, state):
         """The face is a status display for the turn, not a printer that runs
