@@ -374,3 +374,80 @@ class TestSpeechAdapter(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestConfirm(unittest.IsolatedAsyncioTestCase):
+    """A confirm never times out into yes.
+
+    Worth asserting rather than believing: the opposite is a one-line change
+    someone will eventually make to smooth over an awkward pause, and the thing
+    on the other side of it is power_off.
+    """
+
+    def turn(self):
+        from cogiti.turn import Turn, State
+
+        class FakeSession:
+            def __init__(self): self.states = []
+            def on_state(self, turn, state): self.states.append(state)
+        s = FakeSession()
+        return Turn(s, "power off"), s, State
+
+    async def test_silence_expires_into_cancelled(self):
+        t, _s, _State = self.turn()
+        self.assertFalse(await t.confirm("Shut down?", timeout_s=0.05))
+
+    async def test_only_an_explicit_yes_confirms(self):
+        for said, expected in (("yes", True), ("yeah", True), ("go ahead", True),
+                               ("Yes.", True), ("no", False), ("wait", False),
+                               ("no, wait", False), ("", False),
+                               ("yes but not now", False)):
+            t, _s, _State = self.turn()
+            task = asyncio.ensure_future(t.confirm("Shut down?", timeout_s=2))
+            await asyncio.sleep(0.01)
+            t.answer(said)
+            self.assertEqual(await task, expected, "%r" % said)
+
+    async def test_confirming_is_a_state_the_session_can_see(self):
+        """So the next thing typed is routed as an answer rather than
+        resolving as a new utterance — which is how a 'no' once became `mute`."""
+        t, s, State = self.turn()
+        task = asyncio.ensure_future(t.confirm("Shut down?", timeout_s=1))
+        await asyncio.sleep(0.01)
+        self.assertIs(t.state, State.CONFIRMING)
+        t.answer("no")
+        await task
+
+
+class TestAnswerRouting(unittest.IsolatedAsyncioTestCase):
+    """Whether a turn is waiting on a person is a question about the future,
+    not about the state label.
+
+    `answer()` resolves the future, but the state stays CONFIRMING until the
+    turn wakes up. A state-only test therefore says "still waiting" to the very
+    next line read — and a scripted session dispatched the following utterance
+    alongside a turn that had not finished, printing "Muted." before the
+    "Cancelled." that belonged to the question before it.
+    """
+
+    def turn(self):
+        from cogiti.turn import Turn
+
+        class FakeSession:
+            def on_state(self, turn, state): pass
+        return Turn(FakeSession(), "power off")
+
+    async def test_a_turn_needs_an_answer_only_until_it_has_one(self):
+        from cogiti.turn import State
+        t = self.turn()
+        task = asyncio.ensure_future(t.confirm("Shut down?", timeout_s=2))
+        await asyncio.sleep(0.01)
+        self.assertTrue(t.needs_answer())
+
+        t.answer("no")
+        self.assertIs(t.state, State.CONFIRMING, "state has not moved on yet")
+        self.assertFalse(t.needs_answer(), "answered, so nothing is waiting")
+        await task
+
+    async def test_an_idle_turn_never_needs_an_answer(self):
+        self.assertFalse(self.turn().needs_answer())

@@ -34,6 +34,29 @@ class Trace:
         if state.value == "idle" and len(row["states"]) > 1:
             self._write(turn, row, "done")
 
+    def decided(self, session, turn, decision):
+        """What the fast path made of the utterance.
+
+        Recorded for every turn including the escalations, because the
+        interesting question later is not "what did the model answer" but
+        "why did this reach the model at all" — and the answer is a verdict, a
+        tier and a runner-up.
+        """
+        row = self._row(session, turn)
+        if decision is None:
+            row["resolved"] = None
+            return
+        row["resolved"] = {
+            "intent": decision.intent_id,
+            "verdict": decision.verdict,
+            "tier": decision.tier,
+            "confidence": decision.confidence,
+        }
+        if decision.missing_slot:
+            row["resolved"]["missing_slot"] = decision.missing_slot
+        if decision.runner_up_id:
+            row["resolved"]["runner_up"] = decision.runner_up_id
+
     def event(self, session, turn, event):
         row = self._row(session, turn)
         kind = event.get("type")

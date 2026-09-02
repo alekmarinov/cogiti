@@ -15,9 +15,11 @@ import time
 from . import config as _config
 from . import db as _db
 from . import jobs
-from .adapters import agent, presentation
+from .adapters import agent, presentation, resolver
 from . import present
+from . import providers
 from . import secrets
+from . import table
 from . import speech as speech_mod
 from .session import Session
 from .trace import Trace
@@ -146,7 +148,75 @@ class Cogiti:
                 "default, because naming one would mean having an opinion about "
                 "which model runs.")
 
+        # The fast path. Both optional: cogiti with neither escalates
+        # everything, which ports.md says is a valid deployment and is how it
+        # ran before this existed.
+        self.resolver = self._build_resolver(cfg)
+        self.table = self._build_table(cfg)
+
         self.sessions = {}
+
+    def _build_resolver(self, cfg):
+        lib, blob = cfg["resolver_library"], cfg["resolver_blob"]
+        if not lib and not blob:
+            return None
+        if not (lib and blob):
+            raise _config.ConfigError(
+                "resolver_library and resolver_blob go together; only one is set")
+        return resolver.Resolver(
+            lib, blob, config=cfg["resolver_config"] or None,
+            device_location=cfg["device_location"] or None)
+
+    def _build_table(self, cfg):
+        if not cfg["command_table"]:
+            return None
+        providers.load_all()
+        return table.load(cfg["command_table"])
+
+    def resolve(self, text):
+        """The fast path, or None when there is no resolver."""
+        if self.resolver is None:
+            return None
+        return self.resolver.resolve(text)
+
+    async def run_command(self, cmd, decision):
+        """A resolved command, run as a local effect.
+
+        In a thread, not on the loop: a provider is synchronous by contract and
+        may block for up to its timeout. architecture.md §1 says the loop is a
+        router that does not compute — and a provider that stalls the loop
+        would stall the barge-in that is supposed to interrupt it.
+        """
+        fn = providers.get(cmd.provider)
+        try:
+            args, provenance = cmd.bind(decision)
+        except table.TableError as e:
+            return {"type": "failed", "kind": "table", "message": str(e)}
+
+        call = dict(args)
+        if cmd.command:
+            call["_command"] = cmd.command
+        if cmd.source:
+            call["_source"] = cmd.source
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(fn, **call), cmd.timeout_ms / 1000.0)
+        except asyncio.TimeoutError:
+            result = providers.Result.failed("timeout")
+        except Exception as e:                                # noqa: BLE001
+            return {"type": "failed", "kind": "provider", "message": str(e)}
+
+        if not result.ok:
+            return {"type": "result", "say": table.apology(result.reason),
+                    "did": ["tried %s" % cmd.provider]}
+
+        values = dict(args, **result.values)
+        values.update({"_provenance": provenance})
+        out = {"type": "result", "say": table.render(cmd.speak, values)}
+        if cmd.present and cmd.present != "none":
+            out["show"] = table.render(cmd.present, values)
+        return out
 
     def _build_output(self, cfg):
         """Which ports actually answer. `output = text` stays a legitimate
@@ -192,6 +262,33 @@ class Cogiti:
 async def repl(c):
     loop = asyncio.get_event_loop()
     s = c.session()
+    pending = None
+    interactive = sys.stdin.isatty()
+
+    async def settle():
+        """Scripted input only: let the turn get somewhere before reading on.
+
+        It ends on either of two things, and the second is the one that
+        matters: the turn finished, *or* it started waiting for an answer.
+        Waiting only for the first means nothing reads stdin while a confirm
+        is pending, so the answer sitting in the pipe is never delivered and
+        the question dies of its timeout — after which the "no" resolves as a
+        fresh utterance and turns out to mean `mute`.
+
+        A poll rather than an event because this is a development entry point
+        and 10 ms of latency in a REPL buys nothing worth the plumbing.
+        """
+        while pending and not pending.done() and not s.awaiting_answer():
+            await asyncio.sleep(0.01)
+
+    def _report(task):
+        """A dispatched turn's failure has nowhere to surface on its own."""
+        if task.cancelled():
+            return
+        e = task.exception()
+        if e is not None:
+            print("(turn failed: %r)" % e, file=sys.stderr, flush=True)
+
     print("cogiti — type to ask, ctrl-d to leave", flush=True)
     while True:
         line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -203,9 +300,38 @@ async def repl(c):
         # A pending question takes the next thing typed. Nothing else can be
         # meant by it, and treating it as a new utterance would abandon the
         # turn that is waiting.
-        if await s.answer(line):
+        if s.awaiting_answer():
+            await s.answer(line)
+            await settle()
             continue
-        await s.utterance(line)
+
+        pending = asyncio.ensure_future(s.utterance(line))
+        pending.add_done_callback(_report)
+
+        # A person and a script want opposite things from the same code.
+        #
+        # At a terminal, typing over an answer is the typed form of barge-in:
+        # the turn is dispatched, reading continues, and the next line
+        # interrupts. Awaiting here instead would mean nothing reads stdin
+        # while a turn runs, so a confirm could never be answered and would
+        # always die of its timeout.
+        #
+        # Piped in, every line arrives at once. Interrupting on each would
+        # cancel every turn before it spoke — which it did: a six-line session
+        # produced no output at all. A script means "these, in order".
+        if not interactive:
+            await settle()
+
+    # Input ended. A turn still waiting on an answer will never get one, so it
+    # is cancelled rather than waited for — and a cancelled confirm is a
+    # cancelled action, which is the same answer silence gives.
+    if pending and not pending.done():
+        if s.awaiting_answer():
+            pending.cancel()
+        try:
+            await asyncio.wait_for(pending, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
 
 
 def main(argv=None):

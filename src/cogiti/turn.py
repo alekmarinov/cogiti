@@ -29,7 +29,9 @@ import enum
 class State(enum.Enum):
     IDLE = "idle"
     RESOLVING = "resolving"
-    THINKING = "thinking"
+    ACTING = "acting"            # a resolved command, running locally
+    CONFIRMING = "confirming"    # asked, waiting; expires into cancelled
+    THINKING = "thinking"        # escalated
     NEEDS_INPUT = "needs-input"
     SPEAKING = "speaking"
 
@@ -42,10 +44,23 @@ class Turn:
         self.text = text
         self.state = State.IDLE
         self.result = None
+        self.decision = None            # the resolver's, for the trace
         self.question = None            # asked, awaiting an answer
         self._answer = asyncio.Future()
         self._task = None
         self.interrupted = False
+
+    def needs_answer(self):
+        """Is something actually waiting on a person right now?
+
+        The state alone is not enough. `answer()` resolves the future but the
+        state stays CONFIRMING until the turn wakes up and moves on, so a
+        state-only test says "still waiting" to the very next line read — and
+        a scripted session then dispatched the following utterance alongside a
+        turn that had not finished, which printed its answers out of order.
+        """
+        return (self.state in (State.NEEDS_INPUT, State.CONFIRMING)
+                and not self._answer.done())
 
     def to(self, state):
         self.state = state
@@ -60,10 +75,42 @@ class Turn:
         return self._answer
 
     def answer(self, value):
+        """Whatever was being waited for — an agent's question or a confirm."""
         if not self._answer.done():
             self._answer.set_result(value)
         self.question = None
-        self.to(State.THINKING)
+        # A confirm resumes into acting or cancelling and sets its own state;
+        # forcing THINKING here would report an escalation that never happened.
+        if self.state is State.NEEDS_INPUT:
+            self.to(State.THINKING)
+
+    # -------------------------------------------------------- confirming --
+
+    #: Words that mean yes. Deliberately a small closed set, matched exactly:
+    #: anything not on it is a no, and the cost of that asymmetry is a person
+    #: repeating themselves rather than a device doing something irreversible
+    #: because it half-heard "no, wait".
+    YES = frozenset(("yes", "yeah", "yep", "yes please", "go ahead", "do it",
+                     "confirm", "ok", "okay", "sure"))
+
+    async def confirm(self, question, timeout_s=30.0):
+        """Ask, and wait. Returns True only for an explicit yes.
+
+        **A confirm never times out into yes.** It expires into cancelled,
+        silently. This is worth being explicit about because the opposite is a
+        one-line change someone will eventually make to smooth over an awkward
+        pause, and the thing on the other side of it is `power_off`.
+        """
+        self.question = question
+        self._answer = asyncio.Future()
+        self.to(State.CONFIRMING)
+        try:
+            said = await asyncio.wait_for(asyncio.shield(self._answer), timeout_s)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return False
+        finally:
+            self.question = None
+        return str(said).strip().lower().rstrip(".!") in self.YES
 
     # --------------------------------------------------------- interrupt --
 

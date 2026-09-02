@@ -57,23 +57,41 @@ class Session:
         turn._task = asyncio.ensure_future(self._run(turn))
         return await turn._task
 
+    #: States in which the next thing said is an answer, not a new utterance.
+    #: Confirming belongs here for the reason the whole confirm path exists: a
+    #: "no" answering "shut down the device?" must reach the turn that asked.
+    #: Treated as a fresh utterance instead, it resolved to `mute` and the
+    #: shutdown was cancelled only because the question timed out — which is
+    #: the right outcome reached by luck rather than by design.
+    AWAITING = (State.NEEDS_INPUT, State.CONFIRMING)
+
+    def awaiting_answer(self):
+        return self.current is not None and self.current.needs_answer()
+
     async def answer(self, value):
-        """The person answered a question the agent asked."""
-        if self.current and self.current.state is State.NEEDS_INPUT:
+        """The person answered a question that was put to them."""
+        if self.awaiting_answer():
             self.current.answer(value)
             return True
         return False
+
 
     # --------------------------------------------------------------- run --
 
     async def _run(self, turn):
         turn.to(State.RESOLVING)
 
-        # No resolver is configured, so everything escalates. ports.md: "a
-        # resolver that always escalates is also valid, and is how cogiti runs
-        # with no fast path at all."
-        turn.to(State.THINKING)
-        result = await escalate.run(self.cogiti, self, turn)
+        # The fast path. A resolver that always escalates is also valid and is
+        # how cogiti runs with no fast path at all — so an absent one is not a
+        # special case here, it is simply no decision.
+        decision = self.cogiti.resolve(turn.text)
+        turn.decision = decision
+        self.cogiti.trace.decided(self, turn, decision)
+        result = await self._act(turn, decision)
+
+        if result is None:
+            turn.to(State.THINKING)
+            result = await escalate.run(self.cogiti, self, turn)
 
         if turn.interrupted:
             return None
@@ -85,6 +103,44 @@ class Session:
         del self.history[:-HISTORY]
         turn.to(State.IDLE)
         return result
+
+    # ------------------------------------------------------------ acting --
+
+    async def _act(self, turn, decision):
+        """Handle or confirm a resolved intent. `None` means escalate.
+
+        Every route out of here that returns None is a deliberate one, and
+        they are the interesting part:
+
+        - no decision, or `escalate`: the resolver could not do it;
+        - an intent the table has no entry for: a device that has not been
+          taught that yet, which is what the model is for;
+        - a missing required slot: reflexi hands back the intent *and* the
+          slot it lacks, so this is the one escalation that arrives knowing
+          what it wants. Asking "a timer for how long?" belongs here and is
+          not built yet, so for now it escalates — with the intent recorded,
+          which is the difference between a gap and a bug.
+        """
+        if decision is None or decision.verdict == "escalate":
+            return None
+        cmd = self.cogiti.table.get(decision.intent_id) if self.cogiti.table else None
+        if cmd is None:
+            return None
+
+        if decision.verdict == "confirm":
+            # The resolver decided this needs asking; the table only supplies
+            # the wording. cogiti never auto-answers one and never lets an
+            # agent answer one.
+            question = cmd.confirm or "Are you sure?"
+            if not await turn.confirm(question):
+                # Cancelled, or timed out, or anything that was not an explicit
+                # yes. Not an error, and not escalated: the user was asked and
+                # the answer was no.
+                return {"type": "result", "say": "Cancelled.",
+                        "did": ["asked, and did not do it"]}
+
+        turn.to(State.ACTING)
+        return await self.cogiti.run_command(cmd, decision)
 
     # ----------------------------------------------------------- context --
 

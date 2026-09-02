@@ -49,6 +49,21 @@ DEFAULTS = {
     # which is correct for a local model and for the fake.
     "agent_secrets": "",
 
+    # The resolver port. A linked library and its compiled knowledge, both or
+    # neither — cogiti with no resolver escalates everything, which ports.md
+    # says is a valid deployment rather than a degraded one.
+    "resolver_library": "",
+    "resolver_blob":    "",
+    "resolver_config":  "",
+
+    # What fills a slot declared `context_default: device.location`. Empty
+    # leaves such a slot unfilled rather than guessing.
+    "device_location":  "",
+
+    # config/commands.toml: a resolved intent -> an effect. Without it a
+    # resolved intent has nothing to act on, so everything escalates.
+    "command_table":    "",
+
     # The same, for the speech adapter. A cloud voice needs a credential and a
     # local one needs none, and which is in use is a deployment's business.
     "speech_secrets": "",
@@ -62,7 +77,9 @@ DEFAULTS = {
 # started before the face — and the port requires it to survive the face going
 # away and coming back, which makes "absent right now" a normal state rather
 # than a configuration error.
-MUST_EXIST = ("agent_adapter_binary", "speech_adapter")
+MUST_EXIST = ("agent_adapter_binary", "speech_adapter",
+              "resolver_library", "resolver_blob",
+              "resolver_config", "command_table")
 
 
 class ConfigError(Exception):
