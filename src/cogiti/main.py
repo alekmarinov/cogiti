@@ -21,6 +21,7 @@ from . import presentation_templates as templates
 from . import providers
 from . import secrets
 from . import table
+from . import timers
 from . import speech as speech_mod
 from .session import Session
 from .trace import Trace
@@ -153,6 +154,7 @@ class Cogiti:
         # everything, which ports.md says is a valid deployment and is how it
         # ran before this existed.
         self.templates = {}
+        self.timers = timers.Timers(self)
         self.resolver = self._build_resolver(cfg)
         self.table = self._build_table(cfg)
 
@@ -193,6 +195,69 @@ class Cogiti:
         if self.resolver is None:
             return None
         return self.resolver.resolve(text)
+
+    async def start_job(self, cmd, decision, session_id):
+        """An intent that outlives its turn. Only timers, for now."""
+        args, _prov = cmd.bind(decision)
+        if cmd.job == "cancel_timer":
+            return await self.cancel_job(cmd, decision, session_id)
+        if cmd.job == "timer":
+            seconds = int(args.get("duration") or 0)
+            if seconds <= 0:
+                return {"type": "result", "say": "I need a length for that."}
+
+            async def fire(job_id, title):
+                await self.announce(cmd, {"title": title,
+                                          "duration_human": timers.human(seconds)})
+
+            _job_id, title = self.timers.set(session_id, seconds, fire)
+            values = dict(args, title=title,
+                          duration_human=timers.human(seconds))
+            return {"type": "result", "say": table.render(cmd.speak, values),
+                    "did": ["started %s" % title]}
+        return {"type": "failed", "kind": "table",
+                "message": "no runner for job kind %r" % cmd.job}
+
+    async def cancel_job(self, cmd, _decision, _session_id):
+        """"Stop the timer." Selection is contextual, and ambiguity is a
+        question rather than a guess.
+
+        `jobs.md` §6: nobody says "cancel job 01J8ZQ". They say "stop that",
+        "cancel the repository thing", "never mind" — so the reference is to
+        the only one running, or the most recent, and **cancelling the wrong
+        job is a small disaster**. With more than one candidate this says so
+        and stops. Picking the newest would be right most of the time, and the
+        times it was wrong would be exactly the times it mattered.
+
+        Choosing from a list is the real answer and is not built; until it is,
+        saying "there are two" is honest and a guess would not be.
+        """
+        live = timers.running(self.db)
+        if not live:
+            return {"type": "result", "say": "There's no timer running."}
+        if len(live) > 1:
+            return {"type": "result",
+                    "say": "There are %d timers running — which one?"
+                           % len(live),
+                    "did": ["asked which of %d" % len(live)]}
+        job = live[0]
+        self.timers.cancel(job["id"])
+        return {"type": "result",
+                "say": table.render(cmd.speak, {"title": job["title"]}),
+                "did": ["cancelled %s" % job["title"]]}
+
+    async def announce(self, cmd, values):
+        """Say something nobody asked for, right now.
+
+        The first output that does not belong to a turn. Deliberately the
+        dumbest possible version: one line, when the job finishes, and never at
+        any other moment. Whether it is a *good* moment to speak is stage 12's
+        subject and wants a person's attention and a load model, neither of
+        which exists — so this does not pretend to have an opinion.
+        """
+        text = table.render(cmd.announce or "That's done.", values)
+        await self.output.say({"type": "result", "say": text,
+                               "show": text})
 
     async def run_command(self, cmd, decision):
         """A resolved command, run as a local effect.
@@ -384,6 +449,15 @@ def main(argv=None):
         loop.run_until_complete(c.start())
         loop.run_until_complete(repl(c))
     finally:
+        # Live timers are cancelled rather than left behind. Their `sleep`
+        # processes would otherwise outlive cogiti with nothing to announce
+        # them, and their rows would say `running` for ever — the orphan
+        # `jobs.recover` exists to clean up, created deliberately.
+        #
+        # A timer that survives a restart needs somewhere to survive *to*, and
+        # this deployment has no writable state that outlives an update yet.
+        # Cancelling is the honest version of not having that.
+        loop.run_until_complete(c.timers.shutdown())
         loop.close()
     return 0
 

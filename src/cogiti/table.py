@@ -45,18 +45,35 @@ class TableError(Exception):
 
 
 class Command:
-    __slots__ = ("intent", "provider", "speak", "present", "confirm",
-                 "timeout_ms", "offline", "args", "command", "source")
+    __slots__ = ("intent", "provider", "job", "announce", "speak", "present",
+                 "confirm", "timeout_ms", "offline", "args", "command", "source")
+
+    #: Job kinds an intent may start. A job is what a command becomes when it
+    #: outlives its turn — see the last section of `docs/command-table.md`,
+    #: which is emphatic that forcing one into the table is how a device ends
+    #: up pausing for two seconds in the middle of a conversation.
+    JOBS = ("timer", "cancel_timer")
 
     def __init__(self, intent, spec):
         self.intent = intent
         self.provider = spec.get("provider")
-        if not self.provider:
-            raise TableError("[%s] has no provider" % intent)
-        if providers.get(self.provider) is None:
+        self.job = spec.get("job")
+        if bool(self.provider) == bool(self.job):
+            raise TableError(
+                "[%s] needs exactly one of `provider` (finishes inside the "
+                "turn) or `job` (outlives it)" % intent)
+        if self.job and self.job not in self.JOBS:
+            raise TableError("[%s] unknown job kind %r; known: %s"
+                             % (intent, self.job, ", ".join(self.JOBS)))
+        if self.provider and providers.get(self.provider) is None:
             raise TableError(
                 "[%s] names provider %r, which is not registered. Known: %s"
                 % (intent, self.provider, ", ".join(providers.names())))
+        # What is said when the job finishes, which may be an hour later and
+        # with nobody having asked anything. Only a job has one.
+        self.announce = spec.get("announce")
+        if self.announce and not self.job:
+            raise TableError("[%s] has `announce` but is not a job" % intent)
         self.speak = spec.get("speak", "")
         self.present = spec.get("present", "none")
         self.confirm = spec.get("confirm")

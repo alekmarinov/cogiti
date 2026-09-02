@@ -160,6 +160,11 @@ class Session:
                         "did": ["asked, and did not do it"]}
 
         turn.to(State.ACTING)
+        if cmd.job:
+            # Started, not awaited. The whole point of a job is that the turn
+            # ends and it keeps going.
+            return await self.cogiti.start_job(cmd, decision,
+                                               "%s/%s" % self.key)
         return await self.cogiti.run_command(cmd, decision)
 
     async def _fill_slot(self, turn, decision):
