@@ -68,6 +68,10 @@ DEFAULTS = {
     # is data, so a new card is not a new build.
     "presentation_dir": "",
 
+    # The speech port's input half: a long-lived adapter speaking
+    # speech-protocol.md. Empty means cogiti is driven by typing.
+    "speech_in_adapter": "",
+
     # The same, for the speech adapter. A cloud voice needs a credential and a
     # local one needs none, and which is in use is a deployment's business.
     "speech_secrets": "",

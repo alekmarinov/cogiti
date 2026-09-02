@@ -478,6 +478,8 @@ def main(argv=None):
         loop.add_signal_handler(sig, loop.stop)
     try:
         loop.run_until_complete(c.start())
+        if cfg["speech_in_adapter"]:
+            loop.run_until_complete(c.listen(cfg["speech_in_adapter"].split()))
         loop.run_until_complete(repl(c))
     finally:
         # Live timers are cancelled rather than left behind. Their `sleep`
@@ -489,6 +491,8 @@ def main(argv=None):
         # this deployment has no writable state that outlives an update yet.
         # Cancelling is the honest version of not having that.
         loop.run_until_complete(c.timers.shutdown())
+        if c.speech_in:
+            loop.run_until_complete(c.speech_in.close())
         loop.close()
     return 0
 
