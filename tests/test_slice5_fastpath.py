@@ -210,3 +210,62 @@ class TestConfirmRouting(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPresentationTemplates(unittest.TestCase):
+    """Cards are data. `docs/command-table.md`: a new card is not a new build,
+    and a template names objects and relationships but never a coordinate."""
+
+    def tpl(self, **spec):
+        from cogiti import presentation_templates as pt
+        return pt.Template("card", spec)
+
+    def err(self, **spec):
+        from cogiti import presentation_templates as pt
+        with self.assertRaises(pt.TemplateError) as e:
+            pt.Template("card", spec)
+        return str(e.exception)
+
+    def test_a_group_renders_children_inline(self):
+        op = self.tpl(kind="group", id="brain/weather", children=[
+            {"kind": "text", "style": "headline", "text": "{temp_c}°"},
+            {"kind": "text", "style": "caption", "text": "{condition}"},
+        ]).ops({"temp_c": 21, "condition": "clear"})
+        self.assertEqual(op["op"], "create")
+        self.assertEqual(op["kind"], "group")
+        self.assertEqual([c["text"] for c in op["children"]], ["21°", "clear"])
+
+    def test_no_op_ever_carries_a_coordinate(self):
+        """Layout belongs to the adapter, which is the only party that knows
+        the screen."""
+        op = self.tpl(kind="group", children=[{"kind": "text", "text": "x"}]).ops({})
+        for forbidden in ("x", "y", "w", "h", "width", "height"):
+            self.assertNotIn(forbidden, op)
+
+    def test_an_id_outside_the_namespace_is_refused_at_load(self):
+        """cogiti declares its namespace on connect and the adapter enforces
+        ownership, so such an object could be created and never updated."""
+        self.assertIn("namespace", self.err(id="weather/x", kind="text", text="x"))
+
+    def test_the_pinned_region_is_not_available_to_a_command(self):
+        """A command's output is conversational. Pinning belongs to a service,
+        which is there to remove it again."""
+        self.assertIn("region", self.err(kind="text", text="x",
+                                         region="periphery"))
+
+    def test_a_group_with_no_children_is_refused(self):
+        self.assertIn("no children", self.err(kind="group"))
+
+    def test_every_object_gets_a_fallback(self):
+        """The port says an unknown kind still holds its place, which it can
+        only do if it was given something to draw."""
+        op = self.tpl(kind="group", children=[
+            {"kind": "image", "src": "/tmp/x.png"},
+            {"kind": "text", "text": "Sofia"}]).ops({})
+        self.assertEqual(op["fallback"], "Sofia")
+
+    def test_a_value_the_provider_did_not_return_reads_as_the_bug_it_is(self):
+        """Rather than losing the answer that was already computed. This is
+        how a clock card asking for {date_spoken} was caught."""
+        op = self.tpl(kind="text", text="{nope}").ops({})
+        self.assertEqual(op["text"], "{nope}")

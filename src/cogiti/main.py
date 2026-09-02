@@ -17,6 +17,7 @@ from . import db as _db
 from . import jobs
 from .adapters import agent, presentation, resolver
 from . import present
+from . import presentation_templates as templates
 from . import providers
 from . import secrets
 from . import table
@@ -151,6 +152,7 @@ class Cogiti:
         # The fast path. Both optional: cogiti with neither escalates
         # everything, which ports.md says is a valid deployment and is how it
         # ran before this existed.
+        self.templates = {}
         self.resolver = self._build_resolver(cfg)
         self.table = self._build_table(cfg)
 
@@ -171,7 +173,20 @@ class Cogiti:
         if not cfg["command_table"]:
             return None
         providers.load_all()
-        return table.load(cfg["command_table"])
+        t = table.load(cfg["command_table"])
+        self.templates = templates.load_dir(cfg["presentation_dir"])
+        missing = sorted({c.present for c in t.commands.values()
+                          if c.present and c.present != "none"
+                          and c.present not in self.templates
+                          and "{" not in c.present})
+        if missing:
+            # At load, not at first use. A card that is wrong is wrong the day
+            # it is written, and finding out when someone finally asks about
+            # the weather is finding out in the worst place.
+            raise table.TableError(
+                "commands name presentation templates that do not exist: %s"
+                % ", ".join(missing))
+        return t
 
     def resolve(self, text):
         """The fast path, or None when there is no resolver."""
@@ -215,7 +230,12 @@ class Cogiti:
         values.update({"_provenance": provenance})
         out = {"type": "result", "say": table.render(cmd.speak, values)}
         if cmd.present and cmd.present != "none":
-            out["show"] = table.render(cmd.present, values)
+            tpl = self.templates.get(cmd.present)
+            # A named template renders to ops; anything else is a plain line,
+            # which is what a device with a one-line display wants and is not
+            # worth a file of its own.
+            out["show"] = (tpl.ops(values) if tpl
+                           else table.render(cmd.present, values))
         return out
 
     def _build_output(self, cfg):

@@ -20,6 +20,12 @@ def now(**_args):
             # past two" is an answer, and this is spoken aloud.
             "time_spoken": _spoken(t),
             "hour": t.tm_hour, "minute": t.tm_min,
+            # The date too. A clock card that shows today under the time is
+            # the ordinary shape of one, and a template can only use what it
+            # is given — a card naming a value the provider does not return
+            # renders the placeholder, which is how this was noticed.
+            "date_spoken": time.strftime("%A, %-d %B", t),
+            "date_iso": time.strftime("%Y-%m-%d", t),
         },
         # True for under a minute, and memory should know that before it
         # decides to remember it.

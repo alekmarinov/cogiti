@@ -64,6 +64,10 @@ DEFAULTS = {
     # resolved intent has nothing to act on, so everything escalates.
     "command_table":    "",
 
+    # config/presentation/*.toml. A template turns a result into scene ops and
+    # is data, so a new card is not a new build.
+    "presentation_dir": "",
+
     # The same, for the speech adapter. A cloud voice needs a credential and a
     # local one needs none, and which is in use is a deployment's business.
     "speech_secrets": "",
@@ -79,7 +83,8 @@ DEFAULTS = {
 # than a configuration error.
 MUST_EXIST = ("agent_adapter_binary", "speech_adapter",
               "resolver_library", "resolver_blob",
-              "resolver_config", "command_table")
+              "resolver_config", "command_table",
+              "presentation_dir")
 
 
 class ConfigError(Exception):

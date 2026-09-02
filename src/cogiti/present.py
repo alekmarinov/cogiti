@@ -84,6 +84,13 @@ class Presenter:
         show = result.get("show")
         if not show:
             return                       # spoken only; nothing to draw
+        if isinstance(show, dict) and show.get("op") == "create":
+            # A rendered presentation template. It already carries its id,
+            # kind, region and children — this module's job here is only to
+            # remember the object so the turn can clear it.
+            self.a.send(**show)
+            self._showing.add(show["id"])
+            return
         if isinstance(show, str):
             self.a.send(op="create", id=ANSWER, kind="text", text=show,
                         style="title", region=STAGE, lifetime=TURN,
