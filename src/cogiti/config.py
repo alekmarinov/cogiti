@@ -14,6 +14,13 @@ silently ran with the wrong model is unexplainable later.
 **Every setting remembers who decided it**, so `--print-config` can answer "why
 is this value what it is" without anyone reading four files in precedence
 order.
+
+**A path may be written relative to the file that names it.** `~` and `$VAR`
+expand, and a token starting with `./` or `../` resolves against the directory
+holding the config file — not the working directory, which is whatever the
+person happened to be standing in. Without this a development config can only
+name absolute paths, so it carries one developer's home directory and works on
+one machine. `/etc/cogiti.conf` names absolute paths and is unaffected.
 """
 
 import os
@@ -95,6 +102,27 @@ class ConfigError(Exception):
     pass
 
 
+def resolve(value, base=None):
+    """`~`, `$VAR`, and `./` or `../` against `base`.
+
+    Token by token, because a setting may be an argv rather than a path —
+    `agent_adapter` names an interpreter and a script, and `speech_in_adapter`
+    carries flags between its paths. A token that is not a relative path is
+    returned untouched, which is what leaves `--tts` and `example.com` alone.
+
+    Only `./` and `../` are resolved, never a bare `build/x`. A rule that
+    guesses which bare words are paths would eventually guess wrong about one
+    that is not, and the explicit prefix costs two characters.
+    """
+    out = []
+    for token in value.split():
+        token = os.path.expanduser(os.path.expandvars(token))
+        if base and (token.startswith("./") or token.startswith("../")):
+            token = os.path.normpath(os.path.join(base, token))
+        out.append(token)
+    return " ".join(out) if out else value
+
+
 class Config:
     def __init__(self, values, origins):
         self._v, self._origin = values, origins
@@ -146,20 +174,26 @@ def load(argv=None, conf_path="/etc/cogiti.conf", environ=None):
                 raise ConfigError("%s:%d: not a key = value line: %r"
                                   % (conf_path, n, line))
             k, v = (p.strip() for p in line.split("=", 1))
-            values[k], origins[k] = v, "%s:%d" % (conf_path, n)
+            # Relative to the file, not to the working directory: a config is
+            # read from wherever it lives and run from wherever you are.
+            values[k] = resolve(v, base=os.path.dirname(os.path.abspath(conf_path)))
+            origins[k] = "%s:%d" % (conf_path, n)
 
     # 2. the environment
     for k in list(values):
         env = "COGITI_" + k.upper()
         if env in environ:
-            values[k], origins[k] = environ[env], "$" + env
+            # No base: a path in the environment belongs to whoever set it,
+            # and resolving it against a file they may not know about would
+            # be worse than leaving it alone.
+            values[k], origins[k] = resolve(environ[env]), "$" + env
 
     # 3. flags, --key=value
     for arg in (argv or []):
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
             k = k.replace("-", "_")
-            values[k], origins[k] = v, "--%s" % k
+            values[k], origins[k] = resolve(v), "--%s" % k
 
     _check_paths(values, origins)
     return Config(values, origins)

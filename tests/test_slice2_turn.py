@@ -133,5 +133,64 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["presentation_adapter"], "/no/such/socket")
 
 
+class TestPathsRelativeToTheFile(unittest.TestCase):
+    """A development config names a checkout, and a checkout is not in the
+    same place on two machines. Without this the file carries one developer's
+    home directory."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.conf = os.path.join(self.tmp, "sub", "cogiti.conf")
+        os.makedirs(os.path.dirname(self.conf))
+
+    def write(self, text):
+        open(self.conf, "w").write(text)
+        return self.conf
+
+    def test_relative_resolves_against_the_file_not_the_shell(self):
+        os.makedirs(os.path.join(self.tmp, "cards"))
+        cfg = C.load([], conf_path=self.write("presentation_dir = ../cards\n"))
+        self.assertEqual(cfg["presentation_dir"],
+                         os.path.join(self.tmp, "cards"))
+
+    def test_a_tilde_is_a_home_directory(self):
+        cfg = C.load([], conf_path=self.write("state_dir = ~/.local/state/x\n"))
+        self.assertEqual(cfg["state_dir"],
+                         os.path.expanduser("~/.local/state/x"))
+        self.assertNotIn("~", cfg["state_dir"])
+
+    def test_every_path_in_an_argv_is_resolved_and_flags_are_left_alone(self):
+        """`agent_adapter` names an interpreter and a script; the speech one
+        carries flags between its paths."""
+        for name in ("py", "adapter.py"):
+            open(os.path.join(self.tmp, name), "w").close()
+        cfg = C.load([], conf_path=self.write(
+            "agent_adapter = ../py --flag ../adapter.py\n"))
+        self.assertEqual(cfg["agent_adapter"],
+                         "%s/py --flag %s/adapter.py" % (self.tmp, self.tmp))
+
+    def test_a_bare_word_is_never_treated_as_a_path(self):
+        """Only ./ and ../ resolve. A rule that guessed which bare words were
+        paths would eventually guess wrong about one that was not."""
+        cfg = C.load([], conf_path=self.write(
+            "egress_hosts = example.com, api.github.com\n"))
+        self.assertEqual(cfg.list("egress_hosts"),
+                         ["example.com", "api.github.com"])
+
+    def test_an_absolute_path_is_untouched(self):
+        """/etc/cogiti.conf on the appliance names absolute paths and must
+        keep meaning exactly what it says."""
+        cfg = C.load([], conf_path=self.write(
+            "presentation_adapter = /run/avatari.sock\n"))
+        self.assertEqual(cfg["presentation_adapter"], "/run/avatari.sock")
+
+    def test_the_environment_is_not_resolved_against_the_file(self):
+        """A path in the environment belongs to whoever set it, and they may
+        not know which config file is being read."""
+        cfg = C.load([], conf_path=self.write("state_dir = /x\n"),
+                     environ={"COGITI_STATE_DIR": "~/from-env"})
+        self.assertEqual(cfg["state_dir"], os.path.expanduser("~/from-env"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
