@@ -480,7 +480,20 @@ def main(argv=None):
         loop.run_until_complete(c.start())
         if cfg["speech_in_adapter"]:
             loop.run_until_complete(c.listen(cfg["speech_in_adapter"].split()))
-        loop.run_until_complete(repl(c))
+
+        # A device is not a terminal. Started by init with stdin on /dev/null,
+        # the repl reads EOF on its first line, returns, and the process exits
+        # — so the appliance's brain would stop within a second of booting,
+        # taking the speech adapter with it, and the only symptom would be a
+        # face that never answers.
+        #
+        # So: type at it when there is somebody to type, and otherwise just
+        # run. Ears are enough of a reason to stay alive.
+        if sys.stdin.isatty() or not cfg["speech_in_adapter"]:
+            loop.run_until_complete(repl(c))
+        else:
+            print("cogiti — listening", flush=True)
+            loop.run_forever()          # until a signal stops it
     finally:
         # Live timers are cancelled rather than left behind. Their `sleep`
         # processes would otherwise outlive cogiti with nothing to announce
