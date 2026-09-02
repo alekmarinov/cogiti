@@ -28,6 +28,7 @@ import enum
 
 class State(enum.Enum):
     IDLE = "idle"
+    LISTENING = "listening"      # someone is speaking; nothing has been said yet
     RESOLVING = "resolving"
     ACTING = "acting"            # a resolved command, running locally
     CONFIRMING = "confirming"    # asked, waiting; expires into cancelled

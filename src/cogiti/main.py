@@ -15,7 +15,7 @@ import time
 from . import config as _config
 from . import db as _db
 from . import jobs
-from .adapters import agent, presentation, resolver
+from .adapters import agent, audi, presentation, resolver
 from . import present
 from . import presentation_templates as templates
 from . import providers
@@ -131,6 +131,14 @@ class FaceOutput:
     def on_thought(self, text):
         self.p.thought(text)
 
+    def barge_in(self):
+        """Someone started speaking over us. Stop the mouth now.
+
+        Synchronous and unconditional: this runs on the interrupt path, and
+        anything awaited here is time the face spends still talking.
+        """
+        self.p.stop()
+
 
 class Cogiti:
     def __init__(self, cfg):
@@ -154,6 +162,7 @@ class Cogiti:
         # everything, which ports.md says is a valid deployment and is how it
         # ran before this existed.
         self.templates = {}
+        self.speech_in = None
         self.timers = timers.Timers(self)
         self.resolver = self._build_resolver(cfg)
         self.table = self._build_table(cfg)
@@ -322,6 +331,28 @@ class Cogiti:
                                     cfg.secret_grants("speech_secrets")))
         return FaceOutput(present.Presenter(adapter), speech,
                           echo=(cfg["output"] == "text"))
+
+    async def listen(self, argv, session=None):
+        """Wire a speech adapter to a session, for the life of the process.
+
+        The adapter is a device, not a job: it is started once, restarted if it
+        dies, and stopped when cogiti stops.
+        """
+        s = session or self.session()
+        self.speech_in = audi.Speech(
+            argv,
+            on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True),
+            on_speech_start=s.heard_start,
+            on_partial=s.heard_partial,
+            on_final=lambda text, ms: s.heard(text),
+        )
+        caps = await self.speech_in.capabilities()
+        # Partials are required; barge-in is not. A half-duplex device that
+        # finishes its sentence is a valid appliance, and refusing to start
+        # for it would be cogiti having an opinion about someone's hardware.
+        self.speech_in.require(["partials"])
+        await self.speech_in.start()
+        return caps
 
     async def start(self):
         # Orphan recovery before anything else runs, so the table never claims

@@ -47,7 +47,12 @@ class Session:
         go': an interrupted turn may already have written part of an answer,
         and dispatching the next one before that settles mixes them.
         """
-        if self.current and self.current.state not in (State.IDLE, State.SPEAKING):
+        # SPEAKING used to be excluded here, on the reasoning that a turn
+        # that is already answering is nearly done. Barge-in is exactly the
+        # case that reasoning misses: interrupting a device mid-sentence is
+        # the whole point, and a turn that cannot be stopped while it talks
+        # is one that talks over you.
+        if self.current and self.current.state is not State.IDLE:
             old = self.current
             old.interrupt()
             try:
@@ -107,6 +112,55 @@ class Session:
         del self.history[:-HISTORY]
         turn.to(State.IDLE)
         return result
+
+    # ------------------------------------------------------------ heard --
+
+    async def heard_start(self):
+        """Someone began speaking. Barge-in, if we were the one talking.
+
+        The adapter has already stopped its own audio — `speech-protocol.md`
+        §5 — so what is left is the face and the turn. `ports.md` fixes that
+        order and this is the second half of it.
+
+        No transcript exists yet and may never: a cough, a door, a passing
+        conversation. So this interrupts but does not start anything.
+        """
+        stop = getattr(self.cogiti.output, "barge_in", None)
+        if stop:
+            stop()
+        if self.current and self.current.state is not State.IDLE:
+            old = self.current
+            old.interrupt()
+            try:
+                await old._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self.cogiti.trace.interrupted(self, old)
+            self.current = None
+
+    async def heard_partial(self, text, stable):
+        """The transcript so far.
+
+        Resolved on every one of them — reflexi is a linked library at
+        microseconds, which is the entire reason that is affordable — and
+        recorded, but **not acted on**. `architecture.md` §3 allows a
+        deterministic match to pre-warm on a partial: open the socket, start
+        the fetch, produce no effect. Nothing here has anything to pre-warm
+        yet, and inventing one would be inventing a use for a mechanism rather
+        than the other way round.
+
+        An unstable partial is not resolved at all. A recogniser that rewrites
+        its own text as a window slides cannot support the promise cogiti makes
+        about a pattern-tier match, and reading it anyway would break that
+        promise quietly.
+        """
+        if not stable or not text:
+            return None
+        return self.cogiti.resolve(text)
+
+    async def heard(self, text):
+        """A final transcript. This is an utterance like any other."""
+        return await self.utterance(text)
 
     # ------------------------------------------------------------ acting --
 
