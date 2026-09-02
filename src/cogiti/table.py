@@ -29,6 +29,12 @@ except ImportError:                                           # pragma: no cover
 
 from . import providers
 
+#: Seconds an answer stays on screen once it has finished being spoken, unless
+#: the command says otherwise. Ten is long enough to read a sentence twice and
+#: short enough that a device left alone returns to a face rather than to a
+#: stale answer.
+DEFAULT_LINGER = 10.0
+
 # Spoken apologies, one per category, in one place — so the device fails the
 # same way every time rather than in five voices.
 APOLOGIES = {
@@ -46,7 +52,8 @@ class TableError(Exception):
 
 class Command:
     __slots__ = ("intent", "provider", "job", "announce", "speak", "present",
-                 "confirm", "timeout_ms", "offline", "args", "command", "source")
+                 "confirm", "timeout_ms", "offline", "args", "command", "source",
+                 "linger")
 
     #: Job kinds an intent may start. A job is what a command becomes when it
     #: outlives its turn — see the last section of `docs/command-table.md`,
@@ -76,6 +83,26 @@ class Command:
             raise TableError("[%s] has `announce` but is not a job" % intent)
         self.speak = spec.get("speak", "")
         self.present = spec.get("present", "none")
+        # How long the answer stays on screen after it has been spoken, in
+        # seconds. `lifetime: turn` makes expiry the adapter's business, and a
+        # renderer with no notion of a turn boundary — which is every one we
+        # have — simply leaves the card up until something replaces it. So the
+        # answer to "what time is it" sat there for the rest of the evening.
+        #
+        # Per command, because the right duration is a property of the answer
+        # and not of the device: a spoken confirmation is stale the moment it
+        # is heard, an IP address is copied off the screen by hand, and a timer
+        # that has just gone off should not vanish while you walk to it.
+        # `linger = 0` keeps it up until the next answer, which is the old
+        # behaviour and is still the right one for some.
+        self.linger = spec.get("linger", DEFAULT_LINGER)
+        try:
+            self.linger = float(self.linger)
+        except (TypeError, ValueError):
+            raise TableError("[%s] linger must be a number of seconds, not %r"
+                             % (intent, spec.get("linger")))
+        if self.linger < 0:
+            raise TableError("[%s] linger cannot be negative" % intent)
         self.confirm = spec.get("confirm")
         self.timeout_ms = int(spec.get("timeout_ms", 250))
         self.offline = spec.get("offline", "refuse")

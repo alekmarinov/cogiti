@@ -82,9 +82,13 @@ class Presenter:
         comparison — and the protocol already has a shape for it: one group
         with both inside, declared by whoever decided they belong together.
         Two cards that merely happened in a row are not that.
+
+        Returns the id of the object it drew, or None if it drew nothing, so
+        the caller can expire it later without this module having to own a
+        clock.
         """
         if result is None:
-            return
+            return None
         self.clear_thoughts()
         self._clear_previous(self._id_for(result))
 
@@ -93,23 +97,24 @@ class Presenter:
             self.a.send(op="create", id=ANSWER, kind="text", text=text,
                         style="body", region=STAGE, lifetime=TURN)
             self._showing.add(ANSWER)
-            return
+            return ANSWER
 
         show = result.get("show")
         if not show:
-            return                       # spoken only; nothing to draw
+            return None                  # spoken only; nothing to draw
         if isinstance(show, dict) and show.get("op") == "create":
             # A rendered presentation template. It already carries its id,
             # kind, region and children — this module's job here is only to
             # remember the object so the turn can clear it.
             self.a.send(**show)
             self._showing.add(show["id"])
-            return
+            return show["id"]
         if isinstance(show, str):
             self.a.send(op="create", id=ANSWER, kind="text", text=show,
                         style="title", region=STAGE, lifetime=TURN,
                         attention="once")
             self._showing.add(ANSWER)
+            return ANSWER
         else:
             # A structured object. `fallback` is required rather than polite:
             # the port says an unknown kind must still hold its place, and it
@@ -121,6 +126,7 @@ class Presenter:
             op.setdefault("fallback", result.get("say", "")[:120])
             self.a.send(op="create", **op)
             self._showing.add(op["id"])
+            return op["id"]
 
     def speak(self, marks):
         """One `speak`, carrying the marks and the clock they run against.
@@ -156,6 +162,17 @@ class Presenter:
             if oid != keeping:
                 self.a.send(op="destroy", id=oid)
                 self._showing.discard(oid)
+
+    def expire(self, oid):
+        """Take one object down because its time is up.
+
+        Separate from `destroy` on purpose: an object still showing is the
+        only one worth expiring, and an expiry that fires after the card was
+        already replaced must not reach through and remove its replacement.
+        """
+        if oid in self._showing:
+            self.a.send(op="destroy", id=oid)
+            self._showing.discard(oid)
 
     def clear_thoughts(self):
         if THOUGHTS in self._showing:

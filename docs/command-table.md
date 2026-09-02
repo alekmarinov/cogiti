@@ -69,6 +69,25 @@ from `speak` because the two answer different questions — the spoken line is
 what a person needs to hear, the card is what they might want to read a second
 time — and because a device with no screen attached should still work.
 
+**`linger`** is how many seconds the card stays up once the answer has
+finished being spoken. It defaults to 10, and `linger = 0` keeps it until
+something replaces it.
+
+It exists because `lifetime: turn` makes expiry the *adapter's* business, and
+a renderer with no notion of a turn boundary — which is every one we have —
+simply leaves the card there. "What time is it" sat on the stage for the rest
+of the evening.
+
+The right duration is a property of the answer, not of the device, which is
+why it is per command rather than one setting:
+
+    linger   = 45     # an address, copied off the screen and typed elsewhere
+    linger   = 12     # the time, stale almost immediately
+    linger   = 0      # a timer that has just gone off; it waits for you
+
+The countdown starts when speaking ends, not when the card appears — a long
+answer would otherwise spend most of its ten seconds still being read aloud.
+
 ## Presentations
 
 `config/presentation/*.toml`. A template turns a result object into presentation

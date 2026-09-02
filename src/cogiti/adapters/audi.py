@@ -48,6 +48,7 @@ class Speech:
         self._backoff = RESTART_MIN_S
         self._speaking = None            # id of the utterance being played
         self._marks = {}                 # id -> a future for its `speaking`
+        self._turn = None                # the turn a `final` started
 
     # ------------------------------------------------------------- startup --
 
@@ -147,7 +148,22 @@ class Speech:
             await self._call("on_partial", msg.get("text", ""),
                              bool(msg.get("stable", True)))
         elif kind == "final":
-            await self._call("on_final", msg.get("text", ""), msg.get("ms"))
+            # Started here, deliberately not awaited.
+            #
+            # A final starts a turn, and a turn may ask this same adapter to
+            # speak and then wait for the `speaking` that carries the mouth
+            # marks. That event can only arrive through the reader — which is
+            # this coroutine. Awaiting the turn here blocks the reader inside
+            # the turn that is waiting on the reader, and the deadlock breaks
+            # only when say() gives up twenty seconds later: every answer was
+            # a twenty second turn, spoken long after the question.
+            #
+            # Held in an attribute because a bare ensure_future may be
+            # collected mid-flight, and given a done callback because an
+            # exception in a task nobody awaits is otherwise silent.
+            self._turn = asyncio.ensure_future(
+                self._call("on_final", msg.get("text", ""), msg.get("ms")))
+            self._turn.add_done_callback(self._turn_finished)
         elif kind == "speech_end":
             await self._call("on_speech_end")
         elif kind == "speaking":
@@ -162,6 +178,13 @@ class Speech:
             # older cogiti.
             self._warn("unknown speech event %r" % kind)
 
+    def _turn_finished(self, task):
+        if task.cancelled():
+            return
+        e = task.exception()
+        if e is not None:
+            self._warn("turn raised: %r" % e)
+
     async def _call(self, name, *args):
         fn = self.cb.get(name)
         if fn is None:
@@ -172,11 +195,16 @@ class Speech:
 
     # ------------------------------------------------------------ commands --
 
-    async def say(self, text, utterance_id, timeout_s=20.0):
+    async def say(self, text, utterance_id, timeout_s=25.0):
         """Ask it to speak, and wait for the marks a mouth can move to.
 
         cogiti never sees the audio: the samples stay in the process that also
         holds the microphone, which is what makes echo cancellation possible.
+
+        The timeout is longer than audi's own synthesis timeout on purpose. It
+        was the same twenty seconds on both sides, so cogiti gave up in the
+        same instant the adapter would have reported what went wrong, and the
+        log said only that nothing was heard from it.
         """
         if not text:
             return None

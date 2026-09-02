@@ -39,6 +39,7 @@ Steps:
     {"partials": ["a","a b"]}    a growing partial per entry
     {"say_back": true}           echo any `say` as `speaking` with fake marks
     {"await_say": true}          block until cogiti asks us to speak
+    {"dump_commands": "<path>"}  write every command cogiti sent, for the test
     {"expect_stop": true}        block until cogiti sends `stop`, then report
     {"barge_in": {...}}          speech_start while speaking; stops own audio
                                  first, exactly as the protocol requires
@@ -159,6 +160,13 @@ def run(script, inbox):
             if "final" in step["barge_in"]:
                 emit({"type": "final", "text": step["barge_in"]["final"],
                       "ms": 500})
+
+        elif "dump_commands" in step:
+            # Everything cogiti has sent us, written where the test can read
+            # it. A test that wants to prove the microphone was muted needs
+            # the adapter's own account of what it was told, not cogiti's.
+            with open(step["dump_commands"], "w") as f:
+                json.dump(inbox.commands, f)
 
         elif "exit" in step:
             sys.exit(step["exit"])

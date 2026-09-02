@@ -272,3 +272,68 @@ class TestSessionByVoice(unittest.IsolatedAsyncioTestCase):
         self.c.output.barge_in = lambda: stopped.append(True)
         await self.s.heard_start()
         self.assertEqual(stopped, [True])
+
+
+class TestReaderNeverBlocks(Base):
+    """A `final` starts a turn; the turn may need an event from this adapter.
+
+    The reader delivers both. If it waits for the turn while the turn waits
+    for `speaking`, nothing arrives until say() gives up — which is what
+    happened on the device: every answer took exactly the timeout, twenty
+    seconds, and was spoken long after the question.
+    """
+
+    async def test_a_turn_may_ask_the_adapter_to_speak_and_be_answered(self):
+        marks = {}
+        ready = asyncio.Event()
+
+        async def on_final(text, ms):
+            # A turn, in miniature: it answers by asking this same adapter to
+            # speak, and cannot finish until the adapter reports back.
+            marks["got"] = await speech.say("It's half past two.", "u1",
+                                            timeout_s=4.0)
+            ready.set()
+
+        speech = audi.Speech(
+            self.script({"steps": [
+                {"emit": {"type": "final", "text": "what time is it", "ms": 400}},
+                {"await_say": True},
+                {"say_back": True},
+            ]}),
+            on_warn=lambda m: None, on_final=on_final)
+        await speech.start()
+
+        self.assertTrue(await self.drain(ready.is_set, timeout=6.0),
+                        "the turn never finished: the reader was blocked "
+                        "inside it, so `speaking` could not be delivered")
+        self.assertIsNotNone(marks["got"], "say() timed out under its own reader")
+        self.assertIn("visemes", marks["got"])
+        await speech.close()
+
+    async def test_a_slow_turn_does_not_stop_the_next_event_arriving(self):
+        """The second half of the same rule. While a turn is running, speech
+        events keep arriving — which is what makes barge-in possible at all."""
+        seen = []
+
+        async def on_final(text, ms):
+            seen.append(("final", text))
+            await asyncio.sleep(1.5)          # a turn that takes its time
+            seen.append(("done", text))
+
+        speech = audi.Speech(
+            self.script({"steps": [
+                {"emit": {"type": "final", "text": "first", "ms": 400}},
+                {"wait_ms": 200},
+                {"emit": {"type": "speech_start"}},
+            ]}),
+            on_warn=lambda m: None,
+            on_final=on_final,
+            on_speech_start=lambda: seen.append(("start", None)))
+        await speech.start()
+
+        ok = await self.drain(lambda: ("start", None) in seen, timeout=3.0)
+        self.assertTrue(ok, "speech_start waited for the turn to finish")
+        self.assertNotIn(("done", "first"), seen,
+                         "it arrived only after the turn ended, which is the "
+                         "blocking this test exists to catch")
+        await speech.close()

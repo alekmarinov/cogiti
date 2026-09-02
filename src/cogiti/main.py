@@ -66,6 +66,23 @@ class FaceOutput:
         self.p = presenter
         self.speech = speech
         self.echo = echo            # also print, for a workstation with no ears
+        self._expiry = None         # the pending "take that card down" task
+        # The out half of the speech port, when one adapter implements both
+        # halves. Set after construction because the speech-in adapter is
+        # started later — see `listen()`.
+        self.voice = None
+        self._utterance = 0
+        # Whether to stop listening while speaking. True for an adapter that
+        # owns the speaker but cannot cancel it out of the microphone: it
+        # hears its own voice otherwise, transcribes it, answers it, and hears
+        # that. The device held a conversation with itself for four turns and
+        # paid a language model for each one.
+        #
+        # Deafness while speaking is what half duplex *means*, and it is a
+        # real cost: you cannot interrupt it. That is why it is tied to the
+        # adapter's own `barge_in` and lifts by itself the moment an adapter
+        # can cancel — nothing here needs changing when libspeexdsp arrives.
+        self.half_duplex = False
 
     async def say(self, result):
         if result is None:
@@ -76,16 +93,95 @@ class FaceOutput:
         else:
             text = result.get("say", "")
 
-        self.p.result(result)
-        marks = await self.speech.marks(text) if self.speech else None
+        # Any card still counting down belongs to the answer this one is
+        # replacing. Cancel first: an expiry that fires late would reach
+        # through and take down the answer that has just gone up.
+        self._cancel_expiry()
+
+        oid = self.p.result(result)
+        marks = await self._marks_for(text)
         if marks:
             self.p.speak(marks)
-            await self._until_spoken(marks)
+            await self._deafen(True)
+            try:
+                await self._until_spoken(marks)
+            finally:
+                # In a finally because barge-in cancels this, and a device
+                # that stays deaf after an interrupted sentence is worse than
+                # one that never spoke.
+                await self._deafen(False)
+        # Armed only now, so the countdown starts when the answer has finished
+        # being spoken rather than when it appeared. A long answer would
+        # otherwise spend most of its ten seconds still being read aloud.
+        if oid:
+            self._arm_expiry(oid, result.get("linger", table.DEFAULT_LINGER))
         if self.echo or not (marks or self.p.a.connected):
             # Never silently succeed at nothing: if neither port took it, it
             # still has to go somewhere a person can see.
             print(text, flush=True)
         return text
+
+    async def _deafen(self, on):
+        """Stop or resume listening, for a device that cannot do both."""
+        if not (self.half_duplex and self.voice is not None):
+            return
+        try:
+            await self.voice.listen(not on)
+        except Exception as e:                                # noqa: BLE001
+            # Never fail an answer over the microphone. The worst case is a
+            # device that hears itself, which is where this started.
+            print("(could not %s the microphone: %s)"
+                  % ("mute" if on else "unmute", e), file=sys.stderr, flush=True)
+
+    async def _marks_for(self, text):
+        """Marks from whichever half of the speech port is configured.
+
+        **The adapter holding the microphone speaks, when there is one.** audi
+        keeps the played samples because they are the echo canceller's
+        reference; a second process playing audio out of band would leave the
+        canceller with nothing to subtract, and the device would hear its own
+        voice, answer it, and hear that.
+
+        So a standalone `speech_adapter` is the fallback, for a deployment
+        whose perception adapter has no voice — not the other way round.
+        """
+        if not text:
+            return None
+        if self.voice is not None:
+            self._utterance += 1
+            return await self.voice.say(text, "u%d" % self._utterance)
+        if self.speech is not None:
+            return await self.speech.marks(text)
+        return None
+
+    def _cancel_expiry(self):
+        if self._expiry is not None:
+            self._expiry.cancel()
+            self._expiry = None
+
+    def _arm_expiry(self, oid, seconds):
+        """Take the answer down after `seconds`, unless something replaces it.
+
+        `linger = 0` means no timer at all: the card stays until the next
+        answer arrives. That is the behaviour every card had before this
+        existed, and it remains right for anything a person is meant to act on
+        rather than read — a timer that has finished, most obviously.
+        """
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            seconds = table.DEFAULT_LINGER
+        if seconds <= 0:
+            return
+
+        async def countdown():
+            try:
+                await asyncio.sleep(seconds)
+                self.p.expire(oid)
+            except asyncio.CancelledError:
+                pass                     # replaced before its time was up
+
+        self._expiry = asyncio.ensure_future(countdown())
 
     async def _until_spoken(self, marks):
         """Stay in `speaking` for as long as speaking takes.
@@ -302,7 +398,8 @@ class Cogiti:
 
         values = dict(args, **result.values)
         values.update({"_provenance": provenance})
-        out = {"type": "result", "say": table.render(cmd.speak, values)}
+        out = {"type": "result", "say": table.render(cmd.speak, values),
+               "linger": cmd.linger}
         if cmd.present and cmd.present != "none":
             tpl = self.templates.get(cmd.present)
             # A named template renders to ops; anything else is a plain line,
@@ -347,6 +444,20 @@ class Cogiti:
             on_final=lambda text, ms: s.heard(text),
         )
         caps = await self.speech_in.capabilities()
+
+        # One adapter, both halves of the port: it hears and it speaks. The
+        # output was reaching for a separate `speech_adapter` that this
+        # deployment does not configure, so every answer was drawn and none
+        # was spoken — each part working, and nothing joining them.
+        #
+        # `speaks` and not the presence of a --tts flag: audi claims it only
+        # when it has both a voice and a speaker it can actually open, which
+        # is the difference between configured and working.
+        if caps.get("speaks") and isinstance(self.output, FaceOutput):
+            self.output.voice = self.speech_in
+            # It speaks but cannot cancel itself out of its own microphone,
+            # so it must not be listening while it does.
+            self.output.half_duplex = not caps.get("barge_in")
         # Partials are required; barge-in is not. A half-duplex device that
         # finishes its sentence is a valid appliance, and refusing to start
         # for it would be cogiti having an opinion about someone's hardware.
