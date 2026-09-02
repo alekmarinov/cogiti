@@ -4,3 +4,7 @@ build/
 .env
 .env.*
 !.env.example
+
+# Release tarballs from `make dist` / `make dist-assets`. Reproducible from
+# the source beside them, and staged into an image rather than committed.
+/*.tar.xz
