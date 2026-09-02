@@ -153,6 +153,18 @@ response is fixed: stop the presentation adapter, stop the audio, *then*
 listen. Any other order leaves the system talking over the person for a second,
 which is the worst thing it can do.
 
+**The adapter owns the speaker, not just the microphone**, and
+`speech-protocol.md` §1 is the argument: telling the user's voice from the
+device's own is echo cancellation, and that needs the played and captured
+samples in one clock domain. Measured on real hardware, a device hears itself
+at 23× the silent noise floor — so without this, every sentence it speaks
+interrupts itself. A deployment that declares `barge_in: false` is half duplex
+and needs none of it, and is a perfectly good appliance you have to wait for.
+
+`speech-protocol.md` §5 refines the order above: the adapter stops its own
+audio *before* telling cogiti anything, because a round trip is time spent
+talking over someone and the adapter is the only party that can act sooner.
+
 Partial transcripts are how latency is hidden: cogiti reacts before the
 sentence ends. It may act early only on a deterministic resolver tier, and
 never on a destructive intent.
