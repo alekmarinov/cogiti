@@ -388,8 +388,9 @@ class TestConfirm(unittest.IsolatedAsyncioTestCase):
         from cogiti.turn import Turn, State
 
         class FakeSession:
-            def __init__(self): self.states = []
+            def __init__(self): self.states = []; self.asked_for = []
             def on_state(self, turn, state): self.states.append(state)
+            async def asked(self, turn, question): self.asked_for.append(question)
         s = FakeSession()
         return Turn(s, "power off"), s, State
 
@@ -435,6 +436,7 @@ class TestAnswerRouting(unittest.IsolatedAsyncioTestCase):
 
         class FakeSession:
             def on_state(self, turn, state): pass
+            async def asked(self, turn, question): pass
         return Turn(FakeSession(), "power off")
 
     async def test_a_turn_needs_an_answer_only_until_it_has_one(self):
@@ -501,3 +503,47 @@ class TestOneAnswerAtATime(Base):
         self.p.result({"say": "nothing to show for this one"})
         self.settle()
         self.assertEqual(self.ids_on_screen(), [])
+
+
+class TestTheQuestionIsSpoken(unittest.IsolatedAsyncioTestCase):
+    """A question nobody hears is not a question, it is a pause.
+
+    Found on the device: a misheard "what time is it" landed in reflexi's
+    confidence band, cogiti asked to confirm, said nothing, waited thirty
+    seconds and gave up. From in front of the device nothing had happened.
+    """
+
+    def turn(self):
+        from cogiti.turn import Turn
+        said = []
+
+        class FakeSession:
+            def on_state(self, turn, state): pass
+            async def asked(self, turn, question): said.append(question)
+        return Turn(FakeSession(), "power off"), said
+
+    async def test_a_confirm_says_what_it_is_asking(self):
+        t, said = self.turn()
+        task = asyncio.ensure_future(t.confirm("Shut down the device?",
+                                               timeout_s=0.4))
+        await asyncio.sleep(0.05)
+        self.assertEqual(said, ["Shut down the device?"])
+        t.answer("no")
+        await task
+
+    async def test_a_slot_question_says_it_too(self):
+        t, said = self.turn()
+        task = asyncio.ensure_future(t.ask_slot("What level?", timeout_s=0.4))
+        await asyncio.sleep(0.05)
+        self.assertEqual(said, ["What level?"])
+        t.answer("forty")
+        await task
+
+    async def test_the_wait_is_short_enough_to_stand_in_front_of(self):
+        """Thirty seconds of silence was the measured behaviour. The answer it
+        wants is one word."""
+        from cogiti.turn import Turn
+        import inspect
+        for name in ("confirm", "ask_slot"):
+            sig = inspect.signature(getattr(Turn, name))
+            self.assertLessEqual(sig.parameters["timeout_s"].default, 15.0)

@@ -104,10 +104,16 @@ class Turn:
 
         Shared by `confirm` and `ask_slot` because the waiting is identical and
         the difference is only what the answer means.
+
+        **Putting the question means saying it.** It used to be stored on the
+        turn and read by nobody: the device went silent, waited its full
+        timeout, and gave up — and from in front of it nothing had happened at
+        all. A question nobody hears is not a question, it is a pause.
         """
         self.question = question
         self._answer = asyncio.Future()
         self.to(state)
+        await self.session.asked(self, question)
         try:
             return await asyncio.wait_for(asyncio.shield(self._answer), timeout_s)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -115,7 +121,7 @@ class Turn:
         finally:
             self.question = None
 
-    async def confirm(self, question, timeout_s=30.0):
+    async def confirm(self, question, timeout_s=12.0):
         """Ask, and wait. Returns True only for an explicit yes.
 
         **A confirm never times out into yes.** It expires into cancelled,
@@ -128,7 +134,7 @@ class Turn:
             return False
         return str(said).strip().lower().rstrip(".!") in self.YES
 
-    async def ask_slot(self, question, timeout_s=30.0):
+    async def ask_slot(self, question, timeout_s=12.0):
         """Ask for one missing slot. Returns what was said, or None to abandon.
 
         Unlike a confirm, the answer is not a word from a list — it is whatever

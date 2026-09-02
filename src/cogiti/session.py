@@ -77,6 +77,23 @@ class Session:
     def awaiting_answer(self):
         return self.current is not None and self.current.needs_answer()
 
+    async def asked(self, turn, question):
+        """Say the question the turn is waiting on.
+
+        Twelve seconds is a long time to stand in front of something that has
+        gone quiet, and the answer it wants is one word. Saying it is not a
+        courtesy; it is the difference between a question and a hang.
+        """
+        say = getattr(self.cogiti.output, "say", None)
+        if say is None:
+            return
+        try:
+            await say({"type": "result", "say": question, "show": question})
+        except Exception:                                     # noqa: BLE001
+            # A voice that cannot speak must not take the turn down with it —
+            # the answer may still arrive by other means.
+            pass
+
     async def answer(self, value):
         """The person answered a question that was put to them."""
         if self.awaiting_answer():
