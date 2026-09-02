@@ -451,3 +451,53 @@ class TestAnswerRouting(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_idle_turn_never_needs_an_answer(self):
         self.assertFalse(self.turn().needs_answer())
+
+
+class TestOneAnswerAtATime(Base):
+    """A new answer replaces the previous one.
+
+    Found on the device: a failed escalation left "Didn't catch that" on the
+    stage, then the next question put the clock beside it — each card carries
+    its own id, so nothing ever replaced anything and they accumulated with
+    no indication which one had just been asked for.
+    """
+
+    def ids_on_screen(self):
+        """What the renderer would be showing. `create` on an existing id
+        updates it rather than adding a second — the protocol's upsert rule —
+        so this models a set, not a list."""
+        live = []
+        for op in self.r.ops:
+            if op.get("op") == "create" and op["id"] not in live:
+                live.append(op["id"])
+            elif op.get("op") == "destroy" and op.get("id") in live:
+                live.remove(op["id"])
+        return live
+
+    def test_a_second_answer_removes_the_first(self):
+        self.p.result({"say": "couldn't catch that", "show": "Didn't catch that"})
+        self.p.result({"say": "half past two",
+                       "show": {"op": "create", "id": "brain/clock",
+                                "kind": "text", "text": "14:30"}})
+        self.settle()
+        self.assertEqual(self.ids_on_screen(), ["brain/clock"])
+
+    def test_the_same_card_twice_is_updated_not_destroyed(self):
+        """`create` on an existing id updates it — destroying and recreating
+        would flicker, and the protocol says upsert for exactly this reason."""
+        for t in ("14:30", "14:31"):
+            self.p.result({"say": t, "show": {"op": "create", "id": "brain/clock",
+                                              "kind": "text", "text": t}})
+        self.settle()
+        self.assertEqual(self.ids_on_screen(), ["brain/clock"])
+        self.assertEqual([o["id"] for o in self.r.by_op("destroy")], [])
+
+    def test_a_spoken_only_answer_still_clears_the_last_card(self):
+        """Otherwise a card outlives the question it answered, and sits there
+        while the device talks about something else."""
+        self.p.result({"say": "half past two",
+                       "show": {"op": "create", "id": "brain/clock",
+                                "kind": "text", "text": "14:30"}})
+        self.p.result({"say": "nothing to show for this one"})
+        self.settle()
+        self.assertEqual(self.ids_on_screen(), [])

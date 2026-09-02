@@ -69,10 +69,24 @@ class Presenter:
     def result(self, result):
         """The answer, as an object the adapter may later update or be asked
         about. `show` is what the agent chose to put on a screen; `say` is what
-        it chose to be heard. They are deliberately not the same string."""
+        it chose to be heard. They are deliberately not the same string.
+
+        **The previous turn's answer is removed first.** Each card carries its
+        own id — `brain/clock`, `brain/date`, `brain/answer` — so without this
+        they simply accumulate: ask the time after a failed escalation and the
+        stage holds "Didn't catch that" *and* the clock, side by side, with
+        nothing to say which one you just asked for.
+
+        Replacing is the right default because a conversation is a sequence,
+        not a pinboard. Keeping two answers up is a deliberate act — a
+        comparison — and the protocol already has a shape for it: one group
+        with both inside, declared by whoever decided they belong together.
+        Two cards that merely happened in a row are not that.
+        """
         if result is None:
             return
         self.clear_thoughts()
+        self._clear_previous(self._id_for(result))
 
         if result.get("type") == "failed":
             text = "couldn't: %s" % (result.get("message") or result.get("kind"))
@@ -128,6 +142,20 @@ class Presenter:
         return self.a.send(**op)
 
     # ------------------------------------------------------------- tidying --
+
+    def _id_for(self, result):
+        """Which object this result is about to become, so the one it replaces
+        can go and the one it *is* is not destroyed and recreated."""
+        show = result.get("show")
+        if isinstance(show, dict):
+            return show.get("id", ANSWER)
+        return ANSWER
+
+    def _clear_previous(self, keeping):
+        for oid in list(self._showing):
+            if oid != keeping:
+                self.a.send(op="destroy", id=oid)
+                self._showing.discard(oid)
 
     def clear_thoughts(self):
         if THOUGHTS in self._showing:
