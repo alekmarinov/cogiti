@@ -169,3 +169,48 @@ class TestHowLongAnAnswerStays(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNothingWasSaid(unittest.IsolatedAsyncioTestCase):
+    """An empty final is a normal answer from a recogniser, not an error.
+
+    A door or a cough ends the silence without containing words. It was
+    starting a turn, escalating, and paying a language model to consider the
+    empty string.
+    """
+
+    def _session(self):
+        from cogiti.session import Session
+
+        class Brain:
+            def __init__(self):
+                self.asked = []
+
+            def resolve(self, text):
+                self.asked.append(text)
+                return None
+
+        s = Session.__new__(Session)
+        s.cogiti = Brain()
+        s.current = None
+        return s
+
+    async def test_an_empty_final_starts_no_turn(self):
+        s = self._session()
+        for nothing in ("", "   ", "\n", None):
+            self.assertIsNone(await s.heard(nothing))
+        self.assertEqual(s.current, None, "a cough became a turn")
+
+    async def test_a_short_final_is_still_an_utterance(self):
+        """The guard is for nothing at all, not for brevity. 'yes' is an
+        answer and 'stop' is a command."""
+        s = self._session()
+        started = []
+
+        async def utterance(text):
+            started.append(text)
+            return "answered"
+
+        s.utterance = utterance
+        self.assertEqual(await s.heard("stop"), "answered")
+        self.assertEqual(started, ["stop"])

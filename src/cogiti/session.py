@@ -176,7 +176,21 @@ class Session:
         return self.cogiti.resolve(text)
 
     async def heard(self, text):
-        """A final transcript. This is an utterance like any other."""
+        """A final transcript. This is an utterance like any other — unless
+        there is nothing in it.
+
+        A recogniser returns an empty final for a sound that was loud enough
+        to end the silence and had no words in it: a door, a chair, a cough.
+        That is a normal answer and not an error, and it was starting a turn —
+        which resolved to nothing, escalated, and spent thirteen seconds and a
+        language model call establishing that the empty string means nothing.
+
+        Only genuinely empty. Where the line falls for a *short* transcript is
+        a judgement about this room and this microphone, and it belongs in the
+        resolver's thresholds rather than hidden in a guard here.
+        """
+        if not (text or "").strip():
+            return None
         return await self.utterance(text)
 
     # ------------------------------------------------------------ acting --
