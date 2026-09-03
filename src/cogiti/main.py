@@ -14,6 +14,7 @@ import time
 
 from . import config as _config
 from . import db as _db
+from . import detach
 from . import jobs
 from .adapters import agent, audi, presentation, resolver
 from . import present
@@ -259,6 +260,9 @@ class Cogiti:
         # ran before this existed.
         self.templates = {}
         self.speech_in = None
+        # Escalations that outlived their turn, and answers waiting for a
+        # moment to be said. See detach.py.
+        self.pending = detach.Pending()
         self.timers = timers.Timers(self)
         self.resolver = self._build_resolver(cfg)
         self.table = self._build_table(cfg)
@@ -306,6 +310,15 @@ class Cogiti:
         args, _prov = cmd.bind(decision)
         if cmd.job == "cancel_timer":
             return await self.cancel_job(cmd, decision, session_id)
+        handler = {
+            "what_are_you_doing": self.what_are_you_doing,
+            "list_jobs": self.list_jobs,
+            "job_status": self.job_status,
+            "job_logs": self.job_logs,
+            "cancel_job": self.cancel_a_job,
+        }.get(cmd.job)
+        if handler is not None:
+            return await handler(cmd, decision, session_id)
         if cmd.job == "timer":
             seconds = int(args.get("duration") or 0)
             if seconds <= 0:
@@ -350,6 +363,124 @@ class Cogiti:
         return {"type": "result",
                 "say": table.render(cmd.speak, {"title": job["title"]}),
                 "did": ["cancelled %s" % job["title"]]}
+
+    # ------------------------------------------------- talking about work --
+    #
+    # These read and act on the registry, so they run here on the loop rather
+    # than as providers: a provider is called in a worker thread, and the
+    # sqlite connection is single threaded by construction. Snapshotting rows
+    # for a provider would work for the three that only read, and not for the
+    # one that cancels — so all four live together instead of two of them
+    # being somewhere else for a reason nobody would remember.
+
+    def _live(self, exclude_timers=True):
+        """What is running, newest first, as plain rows.
+
+        Timers are excluded because they are jobs in the registry but not work
+        in the sense anybody means when they ask what the device is doing.
+        "What are you doing" answered with "a timer" is a wrong answer to the
+        question that was asked.
+        """
+        rows = [dict(r) for r in _db.live_jobs(self.db)]
+        if exclude_timers:
+            rows = [r for r in rows if r["kind"] != "timer"]
+        rows.sort(key=lambda r: r["created_ns"], reverse=True)
+        return rows
+
+    async def what_are_you_doing(self, _cmd, _decision, _session_id):
+        """Small talk, unless something is running.
+
+        The resolver keeps this separate from list_jobs precisely so that this
+        answer can be "nothing" — the resolver cannot know, and a device that
+        reports on its scheduler when asked how it is doing is answering a
+        question nobody asked.
+        """
+        live = self._live()
+        if not live:
+            return {"type": "result", "say": "Nothing at the moment.",
+                    "linger": 8}
+        if len(live) == 1:
+            return {"type": "result",
+                    "say": "I'm still working on %s." % live[0]["title"],
+                    "linger": 8}
+        return {"type": "result",
+                "say": "I've got %d things going: %s."
+                       % (len(live), ", ".join(r["title"] for r in live[:3])),
+                "linger": 8}
+
+    async def list_jobs(self, _cmd, _decision, _session_id):
+        live = self._live()
+        if not live:
+            return {"type": "result", "say": "Nothing is running.", "linger": 8}
+        lines = ["%s — %s" % (r["title"], r["state"]) for r in live]
+        return {"type": "result",
+                "say": "%d running: %s." % (len(live),
+                                            ", ".join(r["title"] for r in live)),
+                "show": "\n".join(lines),
+                # Zero: a list of what is running is something to act on, not
+                # something to read once. It stays until it is replaced.
+                "linger": 0}
+
+    async def job_status(self, _cmd, _decision, _session_id):
+        live = self._live()
+        if not live:
+            return {"type": "result", "say": "Nothing is running just now.",
+                    "linger": 8}
+        r = live[0]
+        age = max(0, (time.monotonic_ns() - r["created_ns"]) // 1_000_000_000)
+        progress = r["progress"] or r["state"]
+        return {"type": "result",
+                "say": "%s: %s, %s so far." % (r["title"], progress,
+                                               timers.human(int(age))),
+                "linger": 12}
+
+    async def job_logs(self, _cmd, _decision, _session_id):
+        """The last few lines, on the screen rather than read aloud.
+
+        Nobody wants a build log spoken. docs/jobs.md §4: a running job's log
+        is `attention: watch` — external, something happening to the system —
+        which is what a stream is for, and it is shown rather than said.
+        """
+        live = self._live()
+        if not live:
+            return {"type": "result", "say": "Nothing is running.", "linger": 8}
+        r = live[0]
+        lines = [row["line"] for row in _db.tail_log(self.db, r["id"], 12)]
+        if not lines:
+            return {"type": "result",
+                    "say": "%s hasn't said anything yet." % r["title"],
+                    "linger": 8}
+        return {"type": "result",
+                "say": "Showing the last %d lines." % len(lines),
+                "show": {"id": "brain/joblog", "kind": "stream",
+                         "append": "\n".join(lines), "lines": 12,
+                         "style": "caption", "attention": "watch",
+                         "fallback": "%s: %d lines" % (r["title"], len(lines))},
+                "linger": 0}
+
+    async def cancel_a_job(self, _cmd, _decision, _session_id):
+        """Stop something that is running. Ambiguity is a question.
+
+        The intent is `confirm` in the registry, so the user has already been
+        asked before this runs. What is left is *which* — and with more than
+        one candidate this says so rather than picking the newest. Picking
+        would be right most of the time, and wrong exactly when it mattered.
+        """
+        live = self._live()
+        if not live:
+            return {"type": "result", "say": "There's nothing to stop.",
+                    "linger": 8}
+        if len(live) > 1:
+            return {"type": "result",
+                    "say": "There are %d things running — which one?"
+                           % len(live),
+                    "did": ["asked which of %d" % len(live)],
+                    "linger": 0}
+        r = live[0]
+        await jobs.cancel_async(self.db, r["id"], "user")
+        self.pending.drop(r["id"])
+        return {"type": "result", "say": "Stopped %s." % r["title"],
+                "did": ["cancelled %s" % r["title"]], "linger": 8}
 
     async def announce(self, cmd, values):
         """Say something nobody asked for, right now.

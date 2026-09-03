@@ -59,7 +59,14 @@ class Command:
     #: outlives its turn — see the last section of `docs/command-table.md`,
     #: which is emphatic that forcing one into the table is how a device ends
     #: up pausing for two seconds in the middle of a conversation.
-    JOBS = ("timer", "cancel_timer")
+    JOBS = ("timer", "cancel_timer",
+            # Talking about work is not itself work — none of these outlive
+            # their turn. They are listed as jobs because they need the
+            # registry and the event loop, and a provider gets neither: a
+            # provider runs in a worker thread and the sqlite connection is
+            # single threaded by construction.
+            "what_are_you_doing", "list_jobs", "job_status", "job_logs",
+            "cancel_job")
 
     def __init__(self, intent, spec):
         self.intent = intent

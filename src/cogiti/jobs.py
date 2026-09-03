@@ -8,6 +8,7 @@ process, and this module's only long operation is waiting for a signal to
 land — which is bounded and explicit.
 """
 
+import asyncio
 import os
 import signal
 import subprocess
@@ -121,6 +122,59 @@ def cancel(db, job_id, reason="cancelled"):
                            "escaped process group: %s" % survivors)
 
     _db.set_state(db, job_id, "cancelled", error_kind=reason)
+
+
+async def cancel_async(db, job_id, reason="cancelled"):
+    """`cancel`, for a caller on the event loop.
+
+    Identical in what it does to the process group and in what order; the only
+    difference is that the grace period is awaited rather than slept through.
+    That matters because the wait is up to five seconds and
+    `architecture.md` §1 says the loop is a router that does not block — a
+    cancel that stalls it would stall the barge-in that is meant to be able to
+    interrupt anything.
+
+    The database work stays on this thread deliberately. The sqlite connection
+    is single threaded by construction, so moving the whole of this into a
+    worker would need a second connection and a second set of rules about who
+    may write.
+    """
+    row = _db.get_job(db, job_id)
+    if row is None or row["state"] in _db.TERMINAL:
+        return
+
+    for child in _db.children(db, job_id):
+        await cancel_async(db, child["id"], reason)
+
+    pgid = row["pgid"]
+    if pgid:
+        _signal_group(pgid, signal.SIGTERM)
+        if not await _group_gone_async(pgid, TERM_GRACE_S):
+            _signal_group(pgid, signal.SIGKILL)
+        _reap()
+        survivors = _group_members(pgid)
+        if survivors:
+            _db.append_log(db, job_id, "event",
+                           "escaped process group: %s" % survivors)
+
+    _db.set_state(db, job_id, "cancelled", error_kind=reason)
+
+
+async def _group_gone_async(pgid, timeout):
+    """The same poll as `_group_gone`, yielding between attempts.
+
+    Reaping inside the loop, as the sync one does: a killed child stays a
+    zombie with the pgid it always had until its parent calls waitpid, so a
+    check that does not reap first reports an escape on every cancellation.
+    """
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        _reap()
+        if not _group_members(pgid):
+            return True
+        await asyncio.sleep(0.05)
+    _reap()
+    return not _group_members(pgid)
 
 
 def _signal_group(pgid, sig):

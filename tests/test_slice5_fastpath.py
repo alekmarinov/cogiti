@@ -9,6 +9,7 @@ import asyncio, os, sys, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from cogiti import providers, session as session_mod, table as table_mod  # noqa: E402
+from cogiti import detach                                    # noqa: E402
 from cogiti.turn import State                                            # noqa: E402
 
 
@@ -46,6 +47,7 @@ class FakeCogiti:
     """Just enough of Cogiti for a Session."""
 
     def __init__(self, decisions, commands):
+        self.pending = detach.Pending()
         self.decisions = decisions          # utterance -> FakeDecision
         self.table = table_mod.Table(commands)
         self.trace = FakeTrace()

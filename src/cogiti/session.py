@@ -12,6 +12,7 @@ inventing an identity would be worse than admitting there is one user.
 
 import asyncio
 
+from . import detach
 from . import escalate
 from .turn import State, Turn
 
@@ -117,7 +118,13 @@ class Session:
 
         if result is None:
             turn.to(State.THINKING)
-            result = await escalate.run(self.cogiti, self, turn)
+            result, running = await detach.with_deadline(
+                escalate.run(self.cogiti, self, turn))
+            if running is not None:
+                # It is still working. The turn ends anyway — that is the
+                # whole point of the stage — and the answer is delivered when
+                # it arrives, by _delivers().
+                result = self._detach(turn, running)
 
         if turn.interrupted:
             return None
@@ -128,6 +135,12 @@ class Session:
         self.history.append((turn.text, said))
         del self.history[:-HISTORY]
         turn.to(State.IDLE)
+
+        # The end of a turn is the one safe moment to mention work that
+        # finished while nobody was listening. Not a callback: a callback
+        # fires into whichever turn happens to be running and the answer
+        # lands in the wrong conversation.
+        await self._deliver_pending()
         return result
 
     # ------------------------------------------------------------ heard --
@@ -154,6 +167,50 @@ class Session:
                 pass
             self.cogiti.trace.interrupted(self, old)
             self.current = None
+
+    def _detach(self, turn, task):
+        """Stop waiting for an escalation, and arrange for its answer.
+
+        The job row already exists — the agent adapter inserts one before it
+        spawns anything — so this creates nothing. It records who is waiting,
+        and hands the turn a sentence to say meanwhile.
+        """
+        job_id = getattr(turn, "job_id", None) or task.get_name()
+        d = detach.Detached(job_id, turn.text[:60], task, self)
+        self.cogiti.pending.add(d)
+
+        def arrived(t):
+            if t.cancelled():
+                self.cogiti.pending.drop(d.job_id)
+                return
+            e = t.exception()
+            if e is not None:
+                self.cogiti.pending.done(d.job_id, {
+                    "type": "failed", "kind": "job",
+                    "message": "that job failed: %s" % e})
+                return
+            self.cogiti.pending.done(d.job_id, t.result())
+
+        task.add_done_callback(arrived)
+        return {"type": "result", "say": detach.STILL_WORKING, "linger": 0}
+
+    async def _deliver_pending(self):
+        """Say what finished while the user was busy.
+
+        Only when nothing else is happening. A device that speaks an old answer
+        over a new question is worse than one that waits another minute.
+        """
+        if self.current is not None and self.current.state is not State.IDLE:
+            return
+        for d, result in self.cogiti.pending.take():
+            if result is None:
+                continue
+            said = dict(result)
+            # Name it. An answer arriving a minute later with no reference to
+            # the question is an announcement out of nowhere.
+            if said.get("type") != "failed" and said.get("say"):
+                said["say"] = "About %s — %s" % (d.title, said["say"])
+            await self.cogiti.output.say(said)
 
     async def heard_partial(self, text, stable):
         """The transcript so far.

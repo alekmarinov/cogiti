@@ -9,10 +9,12 @@ import asyncio, os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from cogiti import db as D, table as table_mod, timers                # noqa: E402
+from cogiti import detach                                    # noqa: E402
 
 
 class FakeCogiti:
     def __init__(self, db):
+        self.pending = detach.Pending()
         self.db = db
 
 
