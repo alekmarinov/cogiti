@@ -39,6 +39,28 @@ def _single_word(text):
 CANCELLED = object()
 
 UNKNOWN_SPEAKER = "unknown"     # no perception adapter, so nobody is identified
+
+
+#: Words that mean nothing unless something asked. Written out rather than
+#: taken from `Turn.YES` and `Turn.NEGATIONS`, which was the first attempt and
+#: was wrong: `stop` is in NEGATIONS *and* is an intent — the barge-in one,
+#: where latency is the whole feature — so reusing that set would have made
+#: the device ignore the one word it must never ignore. "Cancel", "wait" and
+#: "hold" are in there for the same reason. A set that has to exclude the
+#: interesting half of another set is a different set.
+BARE_ANSWERS = frozenset(("yes", "yeah", "yep", "yup", "yes please", "sure",
+                          "correct", "ok", "okay", "no", "nope", "nah"))
+
+
+def bare_answer(text):
+    """Is this only an answer — a word that means nothing on its own?
+
+    Deliberately narrow. Anything longer is left alone: "no, the other one" is
+    a sentence about something, and guessing at those is how a filter starts
+    eating speech.
+    """
+    word = (text or "").strip().strip(".,!?;:").lower()
+    return word in BARE_ANSWERS
 HISTORY = 6                     # turns of context an escalation is given
 
 
@@ -449,6 +471,19 @@ class Session:
             return None
         if self.awaiting_answer():
             await self.answer(text)
+            return None
+        if bare_answer(text):
+            # A yes with nothing to agree to. Heard on the device: two
+            # escalations were already detached, so the queue took it and
+            # said "I'll get to that when I've finished the bitcoin price" —
+            # a slot spent, and a sentence offered, in reply to a word that
+            # requested nothing.
+            #
+            # The same reasoning as the empty final above, one step along. A
+            # cough is not a turn because there are no words in it; "yes" on
+            # its own is not a turn because it only means anything against a
+            # question, and there is not one. Silence is what a person gets
+            # for agreeing with nobody.
             return None
         return await self.utterance(text)
 

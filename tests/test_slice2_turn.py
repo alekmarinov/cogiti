@@ -184,6 +184,23 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answered, ["yes, please"],
                          "the answer started a new turn instead")
 
+    async def test_a_stray_yes_is_not_a_request(self):
+        """Heard on the device: two escalations were already detached, so the
+        queue took a bare "yes" and said "I'll get to that when I've finished
+        the bitcoin price" — a slot spent and a sentence offered in reply to
+        a word that requested nothing."""
+        self.assertIsNone(await self.s.heard("yes."))
+        self.assertEqual(self.recent(), [], "it started a turn")
+
+    async def test_the_words_that_are_also_commands_still_get_through(self):
+        """`stop` is in Turn.NEGATIONS and is also the barge-in intent, where
+        latency is the whole feature. The first cut of this filter reused
+        that set and would have made the device ignore the one word it must
+        never ignore."""
+        from cogiti.session import bare_answer
+        for word in ("stop", "cancel that", "wait", "never mind"):
+            self.assertFalse(bare_answer(word), word)
+
     async def test_it_keeps_only_the_last_few(self):
         for i in range(HISTORY + 4):
             self.s.remember(said=str(i))
