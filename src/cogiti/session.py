@@ -178,6 +178,18 @@ class Session:
         No transcript exists yet and may never: a cough, a door, a passing
         conversation. So this interrupts but does not start anything.
         """
+        # **A turn that asked a question is not interrupted by the answer.**
+        #
+        # CONFIRMING and NEEDS_INPUT exist to wait for the person to speak, so
+        # somebody speaking is the expected event and not an interruption.
+        # Treating it as barge-in cancelled the question at the exact moment
+        # it was being answered: "remove the clock" — "are you sure?" — "yes"
+        # ended the turn, and the yes then arrived as a fresh utterance with
+        # nothing to attach to and went to the model. Seen on a device, twice,
+        # each time 2.8 seconds after the question — the length of the pause
+        # before the answer.
+        if self.awaiting_answer():
+            return
         stop = getattr(self.cogiti.output, "barge_in", None)
         if stop:
             stop()

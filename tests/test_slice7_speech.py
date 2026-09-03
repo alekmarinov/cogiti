@@ -337,3 +337,82 @@ class TestReaderNeverBlocks(Base):
                          "it arrived only after the turn ended, which is the "
                          "blocking this test exists to catch")
         await speech.close()
+
+
+class TestTheAnswerIsNotAnInterruption(Base):
+    """A turn that asked a question must not be cancelled by the answer.
+
+    Seen on a device: "remove the clock" — "are you sure?" — "yes" ended the
+    turn 2.8 seconds in, at exactly the pause before the answer. speech_start
+    was treated as barge-in, the question was abandoned, and the "yes" then
+    arrived as a fresh utterance with nothing to attach to and went to the
+    model, which replied that it was still working on it.
+    """
+
+    async def test_speech_start_while_confirming_does_not_cancel_the_turn(self):
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "src"))
+        from cogiti.session import Session
+        from cogiti.turn import State
+
+        class FakeTurn:
+            state = State.CONFIRMING
+
+            def needs_answer(self):
+                return True
+
+            def interrupt(self):
+                raise AssertionError("the question was cancelled by its answer")
+
+        class Output:
+            def barge_in(self):
+                raise AssertionError("the mouth was stopped to hear an answer "
+                                     "it had asked for")
+
+        class Brain:
+            output = Output()
+
+        s = Session.__new__(Session)
+        s.cogiti = Brain()
+        s.current = FakeTurn()
+        await s.heard_start()
+        self.assertIsNotNone(s.current, "the waiting turn was dropped")
+
+    async def test_speech_start_while_speaking_still_barges_in(self):
+        """The rule it must not break: interrupting the device mid-sentence is
+        the whole point of barge-in."""
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "src"))
+        from cogiti.session import Session
+        from cogiti.turn import State
+
+        stopped, interrupted = [], []
+
+        class FakeTurn:
+            state = State.SPEAKING
+            _task = asyncio.get_event_loop().create_future()
+
+            def needs_answer(self):
+                return False
+
+            def interrupt(self):
+                interrupted.append(True)
+                if not self._task.done():
+                    self._task.set_result(None)
+
+        class Brain:
+            class output:
+                @staticmethod
+                def barge_in():
+                    stopped.append(True)
+
+            class trace:
+                @staticmethod
+                def interrupted(_s, _t):
+                    pass
+
+        s = Session.__new__(Session)
+        s.cogiti = Brain()
+        s.current = FakeTurn()
+        await s.heard_start()
+        self.assertEqual((stopped, interrupted), ([True], [True]))
