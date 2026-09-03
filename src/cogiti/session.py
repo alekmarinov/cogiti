@@ -309,6 +309,16 @@ class Session:
                 self.cogiti.pending.done(d.job_id, t.result())
             # A slot just opened. This is the only moment one does.
             asyncio.ensure_future(self.start_queued())
+            # And say it, if nobody is talking. Delivery used to happen only
+            # at the end of a turn, which meant "I'll tell you when I have it"
+            # was true exactly when the person spoke again — ask something
+            # slow, then stay quiet, and the answer never came at all. A
+            # promise with no mechanism behind it, like the thirty days.
+            #
+            # _deliver_pending returns early when a turn is running, so this
+            # is safe from here: the answer then waits for that turn to end,
+            # which is the behaviour that was already correct.
+            asyncio.ensure_future(self._deliver_pending())
 
         task.add_done_callback(arrived)
         return d

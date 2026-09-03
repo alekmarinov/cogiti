@@ -160,3 +160,73 @@ class TestTheQueue(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheAnswerArrivesUnprompted(unittest.IsolatedAsyncioTestCase):
+    """"I'll tell you when I have it" has to be true without being prompted.
+
+    Delivery ran only at the end of a turn, so the sentence was conditional on
+    the person speaking again: ask something slow, stay quiet, and the answer
+    never came. Found by a test that asked two questions and saw the first
+    answer arrive during the second.
+    """
+
+    async def test_a_finished_job_is_delivered_with_nobody_speaking(self):
+        import asyncio
+        from cogiti.session import Session
+
+        said = []
+
+        class Output:
+            async def say(self, result):
+                said.append((result or {}).get("say", ""))
+                return said[-1]
+
+        class Brain:
+            output = Output()
+            pending = detach.Pending()
+
+        s = Session.__new__(Session)
+        s.cogiti = Brain()
+        s.current = None
+
+        d = detach.Detached("j1", "the long question", None, s)
+        Brain.pending.add(d)
+        Brain.pending.done("j1", {"type": "result", "say": "forty two"})
+
+        await s._deliver_pending()
+        self.assertEqual(len(said), 1, "nothing was said")
+        self.assertIn("forty two", said[0])
+        self.assertIn("the long question", said[0],
+                      "an answer arriving later must name its question")
+
+    async def test_it_waits_while_somebody_is_talking(self):
+        """An old answer spoken over a new question is worse than one that
+        waits another minute."""
+        import asyncio
+        from cogiti.session import Session
+        from cogiti.turn import State
+
+        said = []
+
+        class Output:
+            async def say(self, result):
+                said.append(result)
+                return ""
+
+        class Busy:
+            state = State.THINKING
+
+        class Brain:
+            output = Output()
+            pending = detach.Pending()
+
+        s = Session.__new__(Session)
+        s.cogiti = Brain()
+        s.current = Busy()
+
+        d = detach.Detached("j2", "q", None, s)
+        Brain.pending.add(d)
+        Brain.pending.done("j2", {"type": "result", "say": "later"})
+        await s._deliver_pending()
+        self.assertEqual(said, [], "spoke over a turn in progress")
