@@ -649,3 +649,40 @@ class TestDeviceReadings(unittest.IsolatedAsyncioTestCase):
         from cogiti import providers, readings
         providers.load_all()
         self.assertIsNone(readings.read("the barometer"))
+
+
+class TestTheServiceCanReachItsOwnDirectory(unittest.TestCase):
+    """A service runs as cogiti-service and lives under a state directory that
+    was 0700 root, so it could not reach its own code. Every dry run exited in
+    zero seconds — on the first machine that actually had the account. The
+    workstation has no such user, never dropped privileges, and never saw it."""
+
+    def test_the_state_directory_becomes_traversable_but_not_listable(self):
+        """0711, not 0755. A service walks through to its own directory and
+        cannot enumerate what else is there."""
+        from cogiti import services
+        state = tempfile.mkdtemp()
+        os.chmod(state, 0o700)
+        root = os.path.join(state, "services")
+        services.prepare_dirs(state, root)
+        self.assertEqual(os.stat(state).st_mode & 0o777, 0o711)
+        self.assertEqual(os.stat(root).st_mode & 0o777, 0o755)
+
+    def test_secrets_are_not_widened_by_it(self):
+        """The corridor, not the rooms off it. secrets/ stays 0700 and owned
+        by root, so it is unreachable either way."""
+        from cogiti import services
+        state = tempfile.mkdtemp()
+        secrets = os.path.join(state, "secrets")
+        os.makedirs(secrets)
+        os.chmod(secrets, 0o700)
+        services.prepare_dirs(state, os.path.join(state, "services"))
+        self.assertEqual(os.stat(secrets).st_mode & 0o777, 0o700)
+
+    def test_owning_a_tree_without_an_account_is_a_no_op(self):
+        """A development checkout has no cogiti-service, and must still run."""
+        from cogiti import services
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "main.py"), "w").close()
+        services.own(d, None)          # must not raise
+        self.assertTrue(os.path.exists(os.path.join(d, "main.py")))

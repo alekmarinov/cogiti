@@ -67,6 +67,49 @@ PAUSED = "paused"
 SERVICE_USER = "cogiti-service"
 
 
+def prepare_dirs(state_dir, *dirs):
+    """Make the state directory traversable, and the service trees readable.
+
+    A service runs as `cogiti-service` and lives under a state directory that
+    is 0700 root, so it could not reach its own code: every dry run exited in
+    zero seconds, on the first machine that actually had the account. The
+    workstation has no such user, never dropped privileges, and never saw it.
+
+    **0711 on the state directory, not 0755.** Traverse without list: a
+    service can walk through to its own directory and cannot enumerate what
+    else is there. `secrets/` stays 0700 and owned by root, so it remains
+    unreachable either way — this widens the corridor, not the rooms off it.
+    """
+    try:
+        os.chmod(state_dir, 0o711)
+    except OSError:
+        pass
+    for d in dirs:
+        os.makedirs(d, exist_ok=True)
+        try:
+            os.chmod(d, 0o755)
+        except OSError:
+            pass
+
+
+def own(path, ids):
+    """Give a directory to the service account, so the service can write in it.
+
+    `docs/services.md` §2 gives a service one directory and says what it keeps
+    there is its own business — which it cannot do if the directory belongs to
+    somebody else.
+    """
+    if ids is None:
+        return
+    uid, gid = ids
+    for root, dirnames, filenames in os.walk(path):
+        for name in [""] + dirnames + filenames:
+            try:
+                os.chown(os.path.join(root, name), uid, gid)
+            except OSError:
+                pass
+
+
 def service_uid():
     """The uid and gid to drop to, or None if the account is not there.
 
@@ -155,6 +198,7 @@ class Services:
     # ------------------------------------------------------------- load --
 
     def load(self):
+        prepare_dirs(os.path.dirname(self.root.rstrip("/")) or "/", self.root)
         if self.ids is None and os.geteuid() == 0:
             # Said once, loudly. A device running services as root while its
             # manifest format promises a uid is a device whose security
@@ -224,6 +268,10 @@ class Services:
             # allow-list in the manifest is enforced on the far end of this
             # socket, which is the only place it can be.
             env["COGITI_BROKER"] = self.broker
+
+        # Its own directory is its own: §2 says what it keeps there is its
+        # business, and it cannot keep anything in a directory owned by root.
+        own(s.m.dir, self.ids)
 
         try:
             s.proc = await asyncio.create_subprocess_exec(

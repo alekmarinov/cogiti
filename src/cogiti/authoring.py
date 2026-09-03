@@ -169,6 +169,15 @@ async def dry_run(service_dir, m, broker_path=None):
     sock = os.path.join(tmp, "avatari.sock")
     fake = FakeRenderer(sock)
     await fake.start()
+    # The service connects to this as cogiti-service, and mkdtemp gives 0700
+    # to root. Without these two lines the dry run runs a perfectly good
+    # service that pins nothing, three times, and reports that it produced no
+    # updates — which is true and entirely the harness's fault.
+    try:
+        os.chmod(tmp, 0o711)
+        os.chmod(sock, 0o666)
+    except OSError:
+        pass
 
     env = dict(os.environ)
     env["AVATARI_SOCKET"] = sock
@@ -178,6 +187,7 @@ async def dry_run(service_dir, m, broker_path=None):
     if broker_path:
         env["COGITI_BROKER"] = broker_path
 
+    _services.own(service_dir, _services.service_uid())
     proc = await asyncio.create_subprocess_exec(
         *m.argv, cwd=service_dir, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -277,6 +287,10 @@ async def from_spec(spec, staging_root):
         raise Rejected("a service called %s is already being written"
                        % spec["name"])
     os.makedirs(d)
+    # The dry run happens as the service account, so the staged tree has to be
+    # reachable by it — the same corridor the installed ones need.
+    _services.prepare_dirs(os.path.dirname(staging_root.rstrip("/")) or "/",
+                           staging_root)
     with open(os.path.join(d, "main.py"), "w") as f:
         f.write(code)
     with open(os.path.join(d, "service.toml"), "w") as f:
