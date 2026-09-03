@@ -26,6 +26,16 @@ import time
 
 from . import manifest as _manifest
 
+#: Where the SDK is, so a service can import it.
+#:
+#: A service is started as a bare `python3 main.py`, and the first line of
+#: every one of them is `from cogiti.service import Service`. cogiti's own
+#: launcher puts itself on sys.path rather than in PYTHONPATH, so a child
+#: inherits nothing — both shipped services died on the import, three times
+#: each, and were correctly stopped by the crash-loop rule with no hint of
+#: why in the log.
+SDK_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 #: §6, exactly: 1 s, 2 s, 4 s, to a 60 s ceiling.
 BACKOFF_START_S = 1.0
 BACKOFF_CEILING_S = 60.0
@@ -80,6 +90,8 @@ class Supervised:
         self.backoff = BACKOFF_START_S
         self.failures = []           # monotonic times of recent exits
         self.detail = ""             # why it is in the state it is in
+        self.recent = []             # its last lines, for "is it working?"
+        self._logs = []
         self.started_ns = 0
         self._cpu_at_start = 0.0
         self._task = None
@@ -146,6 +158,8 @@ class Services:
         env = dict(os.environ)
         env["COGITI_SERVICE"] = s.m.name
         env["COGITI_SERVICE_DIR"] = s.m.dir
+        env["PYTHONPATH"] = os.pathsep.join(
+            [SDK_PATH] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
         if self.broker:
             # How it reaches the network: by asking, never by connecting. The
             # allow-list in the manifest is enforced on the far end of this
@@ -169,7 +183,32 @@ class Services:
         s.started_ns = time.monotonic_ns()
         s._cpu_at_start = _cpu_of(s.proc.pid)
         s._task = asyncio.ensure_future(self._watch(s))
+        # Read what it says, or the pipe fills and the service stops on a
+        # write. §9: a service silent about failing is the failure mode this
+        # whole design is trying to avoid — and a supervisor that captures the
+        # reason and shows nobody is the same failure wearing a hat.
+        s._logs = [asyncio.ensure_future(self._drain(s, s.proc.stderr, "err")),
+                   asyncio.ensure_future(self._drain(s, s.proc.stdout, "out"))]
         return s
+
+    async def _drain(self, s, stream, which):
+        """One line at a time, kept and warned about.
+
+        Only stderr is warned about: a service printing to stdout is being
+        chatty, and a service printing to stderr is telling somebody
+        something.
+        """
+        try:
+            async for raw in stream:
+                line = raw.decode("utf-8", "replace").rstrip()
+                if not line:
+                    continue
+                s.recent.append(line)
+                del s.recent[:-20]
+                if which == "err":
+                    self.on_warn("%s: %s" % (s.m.name, line))
+        except (asyncio.CancelledError, ValueError):
+            pass
 
     async def _watch(self, s):
         """Wait for it to die, then decide whether to bring it back."""

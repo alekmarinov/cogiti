@@ -14,6 +14,7 @@ import time
 
 from . import config as _config
 from . import db as _db
+from . import broker as _broker
 from . import detach
 from . import jobs
 from .adapters import agent, audi, presentation, resolver
@@ -21,6 +22,7 @@ from . import present
 from . import presentation_templates as templates
 from . import providers
 from . import secrets
+from . import services as _services
 from . import table
 from . import timers
 from . import speech as speech_mod
@@ -263,6 +265,17 @@ class Cogiti:
         # Escalations that outlived their turn, and answers waiting for a
         # moment to be said. See detach.py.
         self.pending = detach.Pending()
+
+        # Standing duties. The directory is the truth (services.md §2), so
+        # this holds no state that outlives a restart — it reads what is there.
+        self.services_root = os.path.join(state, "services")
+        self.removed_root = os.path.join(state, "removed")
+        self.broker_path = os.path.join(state, "broker.sock")
+        self.services = _services.Services(
+            self.services_root,
+            on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True),
+            broker=self.broker_path)
+        self.broker = None
         self.timers = timers.Timers(self)
         self.resolver = self._build_resolver(cfg)
         self.table = self._build_table(cfg)
@@ -316,6 +329,10 @@ class Cogiti:
             "job_status": self.job_status,
             "job_logs": self.job_logs,
             "cancel_job": self.cancel_a_job,
+            "list_services": self.list_services,
+            "service_status": self.service_status,
+            "pause_service": self.pause_service,
+            "remove_service": self.remove_service,
         }.get(cmd.job)
         if handler is not None:
             return await handler(cmd, decision, session_id)
@@ -608,7 +625,84 @@ class Cogiti:
         # rather than surfacing at the first escalation.
         caps = await agent.capabilities(self.agent_argv)
         agent.require(caps, ["tools"])
+
+        # Services last, and after the adapters — services.md §6. Not
+        # sequenced against the renderer on purpose: the SDK reconnects, so a
+        # service starting first is a thing to survive rather than to order,
+        # and ordering it would make the boot as slow as its slowest member.
+        installed = self.services.load()
+        if installed:
+            self.broker = _broker.Broker(
+                self.broker_path,
+                {n: sv.m for n, sv in self.services.services.items()},
+                on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True))
+            await self.broker.start()
+            await self.services.start_all()
+            self._sampler = asyncio.ensure_future(self.services.run_sampler())
+            print("services: %s" % ", ".join(installed), file=sys.stderr,
+                  flush=True)
         return caps
+
+    # ------------------------------------------------------- the pinned --
+
+    def _svc(self):
+        return list(self.services.services.values())
+
+    async def list_services(self, _cmd, _decision, _session_id):
+        live = self._svc()
+        if not live:
+            return {"type": "result", "say": "Nothing is pinned.", "linger": 8}
+        return {"type": "result",
+                "say": "%d pinned: %s." % (len(live),
+                                           ", ".join(s.m.title for s in live)),
+                "show": "\n".join("%s — %s" % (s.m.title, s.state)
+                                   for s in live),
+                "linger": 0}
+
+    async def service_status(self, _cmd, _decision, _session_id):
+        """§9: a service that has been broken for a day and said nothing is
+        the failure this whole design is trying to avoid. So the broken ones
+        are named first, and 'everything is fine' is only said when it is."""
+        live = self._svc()
+        if not live:
+            return {"type": "result", "say": "Nothing is pinned.", "linger": 8}
+        bad = [s for s in live if s.state == _services.NEEDS_ATTENTION]
+        if not bad:
+            return {"type": "result",
+                    "say": "All %d are running." % len(live), "linger": 8}
+        s = bad[0]
+        return {"type": "result",
+                "say": "%s has stopped: %s." % (s.m.title, s.detail or "it kept failing"),
+                "linger": 0}
+
+    async def pause_service(self, _cmd, _decision, _session_id):
+        live = [s for s in self._svc() if s.alive]
+        if not live:
+            return {"type": "result", "say": "Nothing is running to pause.",
+                    "linger": 8}
+        if len(live) > 1:
+            return {"type": "result",
+                    "say": "There are %d — which one?" % len(live),
+                    "linger": 0}
+        await self.services.stop(live[0].m.name, _services.PAUSED)
+        return {"type": "result", "say": "Paused %s." % live[0].m.title,
+                "linger": 8}
+
+    async def remove_service(self, _cmd, _decision, _session_id):
+        live = self._svc()
+        if not live:
+            return {"type": "result", "say": "There's nothing to remove.",
+                    "linger": 8}
+        if len(live) > 1:
+            return {"type": "result",
+                    "say": "There are %d — which one?" % len(live),
+                    "linger": 0}
+        title = await self.services.remove(live[0].m.name, self.removed_root)
+        # §7.4: say what went, by title, so a misheard removal is caught now
+        # rather than in a month when somebody misses it.
+        return {"type": "result",
+                "say": "Removed %s. I've kept it for thirty days." % title,
+                "did": ["removed %s" % title], "linger": 12}
 
     def session(self, speaker="unknown", thread="main"):
         key = (speaker, thread)

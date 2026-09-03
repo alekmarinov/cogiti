@@ -66,7 +66,11 @@ class Command:
             # provider runs in a worker thread and the sqlite connection is
             # single threaded by construction.
             "what_are_you_doing", "list_jobs", "job_status", "job_logs",
-            "cancel_job")
+            "cancel_job",
+            # Standing duties, for the same reason: the supervisor and the
+            # manifest live on the loop, and a provider does not.
+            "list_services", "service_status", "pause_service",
+            "remove_service")
 
     def __init__(self, intent, spec):
         self.intent = intent

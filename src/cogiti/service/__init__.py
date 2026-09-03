@@ -130,6 +130,18 @@ class Service:
         return False
 
     async def _keep_connected(self):
+        """Connect, and notice within a second when the renderer goes away.
+
+        The keepalive is the third of avatari_feed.py's rules and it is not
+        optional. A socket's death is only discovered on a write, so a service
+        that writes every fifteen minutes discovers it in fifteen minutes —
+        and spends that time believing it is pinned while the screen is blank.
+        Measured here: after a renderer restart the clock came back in ten
+        seconds and the weather did not come back at all.
+
+        A bare newline, because the renderer's parser skips empty lines. It is
+        not a protocol message and does not need to be one.
+        """
         delay = RECONNECT_START_S
         while not self._stopping:
             if self._sock is None:
@@ -140,6 +152,11 @@ class Service:
                     delay = min(delay * 2, RECONNECT_CEILING_S)
                     continue
             await asyncio.sleep(1.0)
+            try:
+                self._sock.sendall(b"\n")
+            except (BrokenPipeError, ConnectionError, OSError, AttributeError):
+                self.log("the renderer went away; reconnecting")
+                self._sock = None
 
     # ------------------------------------------------------ the network --
 
