@@ -411,8 +411,13 @@ class TestTheForm(unittest.IsolatedAsyncioTestCase):
         rewrite that addresses none of them properly."""
         from cogiti import service_template
         with self.assertRaises(service_template.BadSpec) as e:
-            service_template.validate(self.spec(url="http://x", interval_s=1))
-        self.assertEqual(str(e.exception).count("must"), 1)
+            service_template.validate(
+                self.spec(source="http://x", interval_s=1))
+        said = str(e.exception)
+        # It is told about the source, and not also about the interval. Which
+        # complaint comes first does not matter; that there is one does.
+        self.assertIn("http://x", said)
+        self.assertNotIn("interval", said)
 
     async def test_a_filled_form_becomes_two_files_on_disk(self):
         root = tempfile.mkdtemp()
@@ -533,3 +538,60 @@ class TestTheGateIsAsked(unittest.IsolatedAsyncioTestCase):
 
         t = Turn(FakeSession(), "keep it on screen")
         self.assertFalse(await t.confirm("Shall I keep it?", timeout_s=0.1))
+
+
+class TestLocalSources(unittest.IsolatedAsyncioTestCase):
+    """A clock is not expressible as "fetch a url", and a device that can only
+    pin things it downloaded shows an empty screen when the network is out."""
+
+    def test_a_clock_needs_no_network_and_is_allowed_none(self):
+        from cogiti import service_template as t, manifest as _m
+        spec = t.validate({"name": "clock", "title": "the clock",
+                           "source": "time", "format": "{value}",
+                           "interval_s": 10})
+        code, man = t.render(spec)
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "main.py"), "w").write(code)
+        open(os.path.join(d, "service.toml"), "w").write(man)
+        m = _m.load(os.path.join(d, "service.toml"))
+        self.assertEqual(m.allow, [],
+                         "a local reading must declare no hosts, so the "
+                         "broker permits it nothing")
+        from cogiti import static_checks
+        self.assertEqual(static_checks.check(code, m), set())
+
+    def test_the_generated_clock_has_no_fetch_in_it(self):
+        from cogiti import service_template as t
+        code, _ = t.render(t.validate(
+            {"name": "clock", "title": "the clock", "source": "time",
+             "format": "{value}", "interval_s": 10}))
+        self.assertNotIn("get_json", code)
+        self.assertNotIn("http", code)
+
+    def test_an_unknown_reading_is_refused_and_lists_the_real_ones(self):
+        from cogiti import service_template as t
+        with self.assertRaises(t.BadSpec) as e:
+            t.validate({"name": "x", "title": "x", "source": "the barometer",
+                        "format": "{value}", "interval_s": 10})
+        self.assertIn("time", str(e.exception))
+        self.assertIn("barometer", str(e.exception))
+
+    def test_a_url_still_needs_its_path(self):
+        from cogiti import service_template as t
+        with self.assertRaises(t.BadSpec) as e:
+            t.validate({"name": "x", "title": "x",
+                        "source": "https://api.example.com/v1",
+                        "format": "{value}", "interval_s": 60})
+        self.assertIn("path", str(e.exception))
+
+    async def test_a_clock_actually_runs_and_pins_the_time(self):
+        """The whole point: born, not shipped."""
+        from cogiti import service_template as t
+        root = tempfile.mkdtemp()
+        d, _spec = await authoring.from_spec(
+            {"name": "clock", "title": "the clock", "source": "time",
+             "format": "{value}", "interval_s": 10}, root)
+        m, updates = await authoring.vet(d)
+        self.assertGreaterEqual(len(updates), authoring.REQUIRED_UPDATES)
+        shown = updates[0].get("text", "")
+        self.assertRegex(shown, r"^\d{2}:\d{2}$", shown)

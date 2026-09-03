@@ -40,24 +40,31 @@ from . import static_checks
 PROPOSE_TOOL = {
     "name": "propose_service",
     "description":
-        "Propose a service that fetches a JSON document and keeps one value "
-        "from it on screen. Call this exactly once. If it comes back with a "
-        "problem, fix that one thing and call it again.",
+        "Propose a service that keeps one value on screen. The value comes "
+        "either from a JSON document on the web, or from the device itself. "
+        "Call this exactly once. If it comes back with a problem, fix that "
+        "one thing and call it again.",
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["name", "title", "url", "path", "format", "interval_s"],
+        "required": ["name", "title", "source", "format", "interval_s"],
         "properties": {
             "name": {"type": "string",
                      "description": "short id, lowercase and hyphens, e.g. eth-price"},
             "title": {"type": "string",
                       "description": "what the device calls it out loud, e.g. "
                                      "'the ETH price'"},
-            "url": {"type": "string",
-                    "description": "https url returning JSON"},
+            "source": {"type": "string",
+                       "description":
+                           "either an https url returning JSON, or one of the "
+                           "device's own readings: time, date, day, datetime. "
+                           "A device reading needs no network and works "
+                           "offline; use one when the thing asked for is the "
+                           "clock or the date."},
             "path": {"type": "array", "items": {"type": "string"},
-                     "description": "where the value is in that document, as "
-                                    "keys, e.g. ['ethereum','usd']"},
+                     "description": "only for a url: where the value is in "
+                                    "that document, as keys, e.g. "
+                                    "['ethereum','usd']"},
             "format": {"type": "string",
                        "description": "how it appears on screen; must contain "
                                       "{value}, e.g. 'ETH ${value}'"},

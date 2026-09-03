@@ -26,6 +26,47 @@ import re
 #: ["current_weather", "temperature"], or ["prices", 0, "amount"].
 PATH_RE = re.compile(r"^[A-Za-z0-9_.\- ]{1,64}$")
 
+#: Readings that come from the device rather than the network, and the
+#: strftime that produces each. A fixed set, chosen here: the model names one,
+#: it does not describe how to compute it. That is the same discipline as the
+#: url shape — the model says *what*, never *how*.
+#:
+#: These exist because a clock is not expressible as "fetch a url", and a
+#: device that can only pin things it downloaded is a device that shows an
+#: empty screen when the network is out. Nothing here needs a network, a key,
+#: or a permission.
+LOCAL = {
+    "time": "%H:%M",
+    "date": "%A %-d %B",
+    "day": "%A",
+    "datetime": "%a %-d %b %H:%M",
+}
+
+LOCAL_TEMPLATE = '''"""%(title)s.
+
+Written by InteliBoy from a template. It reads the device's own clock and
+reaches no network at all.
+"""
+
+import time
+
+from cogiti.service import Service, every
+
+svc = Service()
+
+WHEN = %(strftime)r
+FORMAT = %(format)r
+
+
+@every(%(interval)d)
+def tick():
+    svc.show(kind="text", style="headline",
+             text=FORMAT.format(value=time.strftime(WHEN)))
+
+
+svc.run()
+'''
+
 TEMPLATE = '''"""%(title)s.
 
 Written by InteliBoy from a template. The values below are the only thing
@@ -80,7 +121,22 @@ def validate(spec):
     """
     out = {}
 
-    for key in ("name", "title", "url", "format"):
+    # Exactly one source, and which one decides the whole shape of the
+    # service: a url means a fetch and an allow-list, a local name means the
+    # device's own clock and no network at all.
+    source = spec.get("source") or spec.get("url")
+    if not isinstance(source, str) or not source.strip():
+        raise BadSpec("source must be an https url, or one of: %s"
+                      % ", ".join(sorted(LOCAL)))
+    source = source.strip()
+    out["local"] = None if source.startswith("https://") else source
+    if out["local"] is not None and out["local"] not in LOCAL:
+        raise BadSpec("%r is not something the device can read. Use an https "
+                      "url, or one of: %s"
+                      % (source, ", ".join(sorted(LOCAL))))
+    out["url"] = source if out["local"] is None else ""
+
+    for key in ("name", "title", "format"):
         v = spec.get(key)
         if not isinstance(v, str) or not v.strip():
             raise BadSpec("%s must be a non-empty string" % key)
@@ -89,9 +145,6 @@ def validate(spec):
     if not re.match(r"^[a-z][a-z0-9-]{0,31}$", out["name"]):
         raise BadSpec("name must be lowercase letters, digits and hyphens, "
                       "starting with a letter, like 'eth-price'")
-
-    if not out["url"].startswith("https://"):
-        raise BadSpec("url must start with https://")
 
     if "{value}" not in out["format"]:
         raise BadSpec("format must contain {value}, which is where the "
@@ -105,6 +158,11 @@ def validate(spec):
                       "outside that" % interval)
     out["interval_s"] = interval
 
+    if out["local"] is not None:
+        # Nothing to walk: the reading is the value.
+        out["path"] = []
+        return _phrases_of(spec, out)
+
     path = spec.get("path")
     if not isinstance(path, list) or not path:
         raise BadSpec("path must be a non-empty list saying where the value "
@@ -115,7 +173,10 @@ def validate(spec):
         if isinstance(p, str) and not PATH_RE.match(p):
             raise BadSpec("path element %r is not a plain key" % p)
     out["path"] = list(path)
+    return _phrases_of(spec, out)
 
+
+def _phrases_of(spec, out):
     phrases = spec.get("phrases") or []
     if not isinstance(phrases, list) or not all(
             isinstance(p, str) and p.strip() for p in phrases):
@@ -132,15 +193,23 @@ def validate(spec):
 def render(spec):
     """The two files, as text. `spec` must have been through `validate`."""
     from urllib.parse import urlparse
-    host = (urlparse(spec["url"]).hostname or "").lower()
-
-    code = TEMPLATE % {
-        "title": spec["title"],
-        "url": spec["url"],
-        "path": spec["path"],
-        "format": spec["format"],
-        "interval": spec["interval_s"],
-    }
+    host = ""
+    if spec["local"] is not None:
+        code = LOCAL_TEMPLATE % {
+            "title": spec["title"],
+            "strftime": LOCAL[spec["local"]],
+            "format": spec["format"],
+            "interval": spec["interval_s"],
+        }
+    else:
+        host = (urlparse(spec["url"]).hostname or "").lower()
+        code = TEMPLATE % {
+            "title": spec["title"],
+            "url": spec["url"],
+            "path": spec["path"],
+            "format": spec["format"],
+            "interval": spec["interval_s"],
+        }
 
     manifest = [
         "# Written by InteliBoy from a template, and approved out loud.",
@@ -158,7 +227,10 @@ def render(spec):
         "processes    = 2",
         "",
         "[network]",
-        "allow = [%s]" % json.dumps(host),
+        # Empty for a local reading, and that is the whole of its network
+        # policy: the broker permits nothing to a service that declared
+        # nothing, so a clock cannot reach anything even if it tried.
+        "allow = [%s]" % (json.dumps(host) if host else ""),
         "",
         "[secrets]",
         "require = []",
