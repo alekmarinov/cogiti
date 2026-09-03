@@ -14,19 +14,25 @@ from .adapters import agent
 
 
 def device_grant(cogiti):
-    """The device's own commands, as a tool the model may call.
+    """The device's own commands — all of them — as a tool the model may call.
 
     Without this an escalation could only talk about the device. "Turn it up a
     bit, would you" in a sentence the resolver does not match got an agreeable
     answer and no change in volume — the device knew how, and the part of it
     that was listening had no way to say so.
+
+    There is no subset. An escalation happens precisely when somebody did not
+    find the sentence the resolver wanted, so offering it less than the
+    resolver can reach reproduces the original fault one level up. Consent is
+    kept by asking, not by hiding: a command with a `confirm` puts that
+    question to the person before it happens.
     """
     if cogiti.table is None:
         return None, {}
     offers = device_tool.offered(cogiti.table)
     if not offers:
         return None, {}
-    return device_tool.tool(offers, device_tool.withheld(cogiti.table)), offers
+    return device_tool.tool(offers, device_tool.asks(cogiti.table)), offers
 
 
 def grants(cogiti, text):

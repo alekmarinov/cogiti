@@ -83,7 +83,17 @@ PROPOSE_TOOL = {
 SYSTEM = (
     "You are configuring a small display service for a voice appliance. You "
     "do not write code: call propose_service with the details and the device "
-    "builds it. Choose a public JSON endpoint that needs no API key. If you "
+    "builds it.\n\n"
+    # This used to say only "choose a public JSON endpoint", which sent the
+    # model looking for a clock API. The device has a clock. The tool
+    # description carried the right guidance and the system prompt pushed
+    # the other way, which is the worse of the two places to be wrong.
+    "**If the thing asked for is about this machine or the time, use a "
+    "device source** — time, date, day, datetime, uptime, disk, memory, "
+    "load, ip, hostname. Those need no network, no key and no endpoint that "
+    "might stop answering, and going looking for an api to tell this device "
+    "what time it is would be absurd.\n\n"
+    "Otherwise choose a public JSON endpoint that needs no API key. If you "
     "do not know one that certainly exists, say so instead of guessing — a "
     "service pointing at a url that does not answer is worse than none."
 )

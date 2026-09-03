@@ -63,6 +63,23 @@ class Turn:
         return (self.state in (State.NEEDS_INPUT, State.CONFIRMING)
                 and not self._answer.done())
 
+    def can_ask(self):
+        """Is there still somebody attached to this turn to put a question to?
+
+        A turn that was interrupted, or that has detached and left the answer
+        to arrive later, has nobody waiting on it: a question it asked would
+        be spoken into a conversation that has moved on, and the reply would
+        reach whatever is current instead. So a command needing consent is
+        refused rather than performed without it.
+
+        The session must still consider this the live turn. `current` moves
+        on when the next utterance is taken, and the detached case is exactly
+        the one where a job outlives the turn that started it.
+        """
+        return (not self.interrupted
+                and getattr(self.session, "current", None) is self
+                and self.state is not State.IDLE)
+
     def to(self, state):
         self.state = state
         self.session.on_state(self, state)

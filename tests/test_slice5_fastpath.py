@@ -339,42 +339,36 @@ class TestTheDeviceIsOfferedToTheModel(unittest.TestCase):
         offers = self.offers({"get_time": {"provider": "clock.now"}})
         self.assertIn("get_time", offers)
 
-    def test_anything_needing_consent_is_withheld(self):
-        """A confirm exists because a person should be asked, and a model that
-        can call it has answered on their behalf."""
-        offers = self.offers({"power_off": {"provider": "shell.run",
-                                            "command": ["true"],
-                                            "confirm": "Shut down?"}})
-        self.assertEqual(offers, {})
+    def test_everything_in_the_table_is_offered(self):
+        """No hole in the list. Whatever a person could get by saying the
+        right sentence, an escalation can get by calling this — because an
+        escalation happens exactly when they did not find that sentence."""
+        offers = self.offers({
+            "get_time": {"provider": "clock.now"},
+            "greeting": {"provider": "conversation.acknowledge"},
+            "list_services": {"job": "list_services"},
+            "power_off": {"provider": "shell.run", "command": ["true"],
+                          "confirm": "Shut down?"},
+        })
+        self.assertEqual(sorted(offers),
+                         ["get_time", "greeting", "list_services",
+                          "power_off"])
 
-    def test_a_job_that_only_reports_is_offered(self):
-        """Being a job is not the test, and using it as one was wrong in both
-        directions. "What have you got pinned" is a job because the registry
-        lives on the event loop, and it answers in three seconds — withholding
-        it hid a thing the device does well from the part of it that gets
-        asked in sentences the resolver misses."""
-        offers = self.offers({"list_services": {"job": "list_services"}})
-        self.assertIn("list_services", offers)
+    def test_the_ones_that_ask_are_named_with_their_wording(self):
+        """So the model knows a refusal is an ordinary outcome, and does not
+        promise the thing is done before anybody has been asked."""
+        from cogiti import device_tool
+        t = table_mod.Table({k: table_mod.Command(k, v) for k, v in {
+            "get_time": {"provider": "clock.now"},
+            "remove_service": {"job": "remove_service",
+                               "confirm": "Delete it for good?"},
+        }.items()})
+        self.assertEqual(device_tool.asks(t),
+                         {"remove_service": "Delete it for good?"})
+        d = device_tool.tool(device_tool.offered(t),
+                             device_tool.asks(t))["description"]
+        self.assertIn('remove_service ("Delete it for good?")', d)
 
-    def test_a_job_that_says_never_is_withheld(self):
-        """`pin_thing` is the other direction: a job that writes a service,
-        takes three minutes and asks a question halfway through. Nothing about
-        its kind says that, so its entry says it."""
-        offers = self.offers({"pin_thing": {"job": "pin_thing",
-                                            "agent": "never"}})
-        self.assertEqual(offers, {})
-
-    def test_agent_takes_only_never(self):
-        """Because "allowed" is the default, and a field with two spellings of
-        yes invites a third."""
-        with self.assertRaises(table_mod.TableError) as e:
-            table_mod.Command("x", {"job": "stop", "agent": "sometimes"})
-        self.assertIn("must be", str(e.exception))
-
-    def test_chatter_is_withheld(self):
-        offers = self.offers({"greeting": {"provider":
-                                           "conversation.acknowledge"}})
-        self.assertEqual(offers, {})
 
     def test_a_required_slot_is_advertised(self):
         offers = self.offers({"get_price": {
@@ -382,22 +376,66 @@ class TestTheDeviceIsOfferedToTheModel(unittest.TestCase):
             "args": {"symbol": {"slot": "symbol", "required": True}}}})
         self.assertEqual(offers["get_price"], "symbol")
 
-    def test_what_it_may_not_do_is_still_told_to_it(self):
-        """Knowledge, not power. "Pin the coke on the screen" reached a model
-        that did not know this device pins anything, so rather than saying the
-        obvious thing it improvised. Naming them lets it hand the request back
-        in words that work."""
+    def test_a_model_calling_a_confirm_asks_the_person(self):
+        """The whole of the safety argument, now that nothing is withheld.
+
+        The model proposes and cogiti decides — and deciding here means
+        asking whoever is standing in front of it, in the words the table
+        gives, through the turn they are already in.
+        """
+        import asyncio
         from cogiti import device_tool
-        t = table_mod.Table({k: table_mod.Command(k, v) for k, v in {
-            "get_time": {"provider": "clock.now"},
-            "pin_thing": {"job": "pin_thing", "confirm": "Keep it up?"},
-        }.items()})
-        self.assertEqual(device_tool.withheld(t), {"pin_thing": "Keep it up?"})
-        d = device_tool.tool(device_tool.offered(t),
-                             device_tool.withheld(t))["description"]
-        self.assertIn("pin_thing (it asks \"Keep it up?\")", d)
-        self.assertNotIn("pin_thing", d[:d.index("also")])
-        self.assertEqual(d.count("pin_thing"), 1, "offered as well as named")
+        asked, ran = [], []
+
+        class Turn:
+            def can_ask(self):
+                return True
+            async def confirm(self, q):
+                asked.append(q)
+                return False           # they said no
+
+        class Brain:
+            table = table_mod.Table({"remove_service": table_mod.Command(
+                "remove_service", {"job": "remove_service",
+                                   "confirm": "Delete it for good?"})})
+            async def start_job(self, *a, **k):
+                ran.append(a)
+                return {"type": "result", "say": "gone"}
+
+        out = asyncio.run(device_tool.run(
+            Brain(), device_tool.offered(Brain.table),
+            {"command": "remove_service"}, "s1", Turn()))
+        self.assertEqual(asked, ["Delete it for good?"])
+        self.assertEqual(ran, [], "it ran anyway after being refused")
+        self.assertTrue(out.get("refused"))
+        self.assertFalse(out["ok"])
+
+    def test_it_will_not_perform_a_confirm_with_nobody_to_ask(self):
+        """A detached or interrupted turn has nobody waiting on it. Doing it
+        anyway performs the confirm on somebody's behalf, which is the exact
+        thing the wording exists to prevent."""
+        import asyncio
+        from cogiti import device_tool
+        ran = []
+
+        class Gone:
+            def can_ask(self):
+                return False
+
+        class Brain:
+            table = table_mod.Table({"power_off": table_mod.Command(
+                "power_off", {"provider": "shell.run", "command": ["true"],
+                              "confirm": "Shut down?"})})
+            async def run_command(self, *a):
+                ran.append(a)
+                return {"type": "result", "say": "bye"}
+
+        out = asyncio.run(device_tool.run(
+            Brain(), device_tool.offered(Brain.table),
+            {"command": "power_off"}, "s1", Gone()))
+        self.assertEqual(ran, [])
+        self.assertFalse(out["ok"])
+        self.assertFalse(out["asked"])
 
     def test_the_declaration_lists_what_each_needs(self):
         from cogiti import device_tool

@@ -12,29 +12,31 @@ the model calls `device`, cogiti runs the command it would have run for a
 resolved intent, and hands back what the provider returned. The model then
 says something true about a thing that has actually happened.
 
-**What is offered, and what is not.**
+**Everything the resolver can reach, the model can reach.** There is no
+second list and no hole in this one: whatever a person could get by saying
+the right sentence, an escalation can get by calling this, because the
+escalation happens exactly when they did *not* find the right sentence.
 
-Only commands whose intent the resolver would `handle`. Anything the registry
-marks `confirm` — removing a service, shutting down, pausing something — is
-withheld, and that is the whole safety argument here: a confirm exists because
-a *person* should be asked, and a model that can call it has answered the
-question on their behalf. The list is derived from the table rather than
-written out, so an intent added later is offered or withheld by its own
-verdict and nobody has to remember this file exists.
+Two earlier cuts at this were both wrong, and wrong in the same way — they
+tried to encode consent as absence.
 
-**Jobs are not withheld by being jobs**, which is what this used to do and
-was wrong in both directions. "What have you got pinned" is a job because the
-registry lives on the event loop, and it answers in three seconds; `pin_thing`
-is a job because it writes a service, and it takes three minutes and asks a
-question halfway through. Withholding by kind hid the first and, had the kind
-test ever been relaxed, would have parked the model inside the second. So a
-command that must not be model-run says `agent = "never"` in its own entry,
-and this reads that.
+First everything with a `confirm` wording was withheld, on the reasoning that
+a confirm exists because a person should be asked and a model that can call
+it has answered on their behalf. The second half of that is true; the
+conclusion does not follow. The model is not the one answering.
+
+Then jobs were withheld for being jobs, which hid "what have you got pinned"
+— three seconds and read-only — while the thing actually worth being careful
+about, an authoring run that writes a service, is a job for the same
+mechanical reason.
+
+**So consent is enforced where it was declared, not by omission.** A command
+carrying a `confirm` asks the person when the model calls it, in the same
+words and through the same turn as the fast path. The model proposes and
+cogiti decides — `security.md` — and "decides" here means asking whoever is
+standing in front of it. A refusal comes back as a refusal, which the model
+is told to relay rather than paper over.
 """
-
-#: Providers that only produce a sentence. Offering them would spend a tool
-#: call to be told to say hello, which the model can do by saying hello.
-CHATTER = ("conversation.acknowledge",)
 
 
 class Slot(dict):
@@ -74,28 +76,13 @@ class Decision:
 
 
 def offered(table):
-    """Which commands the model may run, and what each wants.
+    """Every command in the table, and what each wants.
 
-    Derived from the table's own fields, so nothing here is a second list to
-    keep in step:
-
-      a `confirm` wording means a *person* is meant to be asked, and a model
-      that can call it has answered on their behalf — power_off, reboot, and
-      anything that deletes what somebody built;
-
-      `agent = "never"` is the entry saying so itself, for the ones no other
-      field catches: authoring a service, cancelling someone's work, and the
-      two that are about the conversation rather than the world;
-
-      chatter produces a sentence and nothing else.
-
-    An intent added later is offered or withheld by what its own entry says,
-    and nobody has to remember this file exists.
+    The table is the list. An intent added later is offered because it is
+    there, and nobody has to remember this file exists.
     """
     out = {}
     for intent, cmd in sorted(table.commands.items()):
-        if cmd.confirm or cmd.agent == "never" or cmd.provider in CHATTER:
-            continue
         wants = None
         for name, spec in (cmd.args or {}).items():
             if spec.get("required"):
@@ -105,24 +92,15 @@ def offered(table):
     return out
 
 
-def withheld(table):
-    """What the device can do that the model may not start itself.
+def asks(table):
+    """Which commands put a question to the person before they happen.
 
-    Offered as knowledge, not as power. Without it the model does not know
-    these exist at all: "pin the coke on the screen" reached one that had no
-    idea this device pins anything, so instead of saying the obvious thing it
-    improvised. Knowing means it can hand the request back in words that
-    work — which is the honest answer when the doing is somebody else's.
-
-    Each carries its own confirm wording where it has one, because that
-    wording already says what the thing does in a sentence meant for a person.
+    Named to the model so it knows a call may come back refused and that this
+    is an ordinary outcome rather than a fault — and so it does not promise,
+    before asking, that the thing is done.
     """
-    out = {}
-    for intent, cmd in sorted(table.commands.items()):
-        if intent in offered(table) or cmd.provider in CHATTER:
-            continue
-        out[intent] = cmd.confirm
-    return out
+    return {i: c.confirm for i, c in sorted(table.commands.items())
+            if c.confirm}
 
 
 def tool(offers, others=None):
@@ -141,13 +119,12 @@ def tool(offers, others=None):
         "Available: " + ", ".join(lines))
     if others:
         description += (
-            ". This device can also do these, but only when the person asks "
-            "for them plainly, so you cannot call them: "
-            + ", ".join("%s (it asks \"%s\")" % (i, c) if c else i
-                        for i, c in sorted(others.items()))
-            + ". If they want one, say what it is they should ask for — "
-              "never say the device cannot do it, and never pretend you did "
-              "it.")
+            ". These ask the person first, in these words, and you will be "
+            "told what they said: "
+            + ", ".join("%s (\"%s\")" % (i, c) for i, c in sorted(others.items()))
+            + ". Call them the same as any other when that is what was "
+              "wanted — but do not say the thing is done until the result "
+              "says it is, and if it comes back refused, say so plainly.")
     return {
         "name": "device",
         "description": description,
@@ -192,6 +169,27 @@ async def run(cogiti, offers, args, session_id=None, turn=None):
                                                                       wants)}
     slots = {wants: Slot(argument)} if wants and argument else {}
     decision = Decision(intent, slots)
+
+    if cmd.confirm:
+        # The same question, in the same words, through the same turn as the
+        # fast path. Withholding these was the old answer and it encoded
+        # consent as absence: the model could not ask for the thing, so the
+        # person was never asked either, and what they got instead was a
+        # sentence about how they might phrase it.
+        if turn is None or not turn.can_ask():
+            # The turn has ended — detached, interrupted, or answered — so
+            # there is nobody attached to ask. Refusing is the only honest
+            # move: doing it anyway performs a confirm on somebody's behalf,
+            # which is the exact thing the wording exists to prevent.
+            return {"ok": False, "asked": False,
+                    "problem": "%s needs %s to be asked first, and the turn "
+                               "that could ask them has ended. Tell them to "
+                               "say it themselves." % (intent, "them")}
+        if not await turn.confirm(cmd.confirm):
+            return {"ok": False, "asked": True, "refused": True,
+                    "problem": "they were asked %r and did not say yes"
+                               % cmd.confirm}
+
     if cmd.job:
         # A reporting job — the slow ones are withheld — so it is awaited like
         # any other command. `start_job` wants the turn because some of these

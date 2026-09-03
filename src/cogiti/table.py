@@ -53,7 +53,7 @@ class TableError(Exception):
 class Command:
     __slots__ = ("intent", "provider", "job", "announce", "speak", "present",
                  "confirm", "timeout_ms", "offline", "args", "command", "source",
-                 "linger", "agent")
+                 "linger")
 
     #: Job kinds an intent may start. A job is what a command becomes when it
     #: outlives its turn — see the last section of `docs/command-table.md`,
@@ -119,24 +119,12 @@ class Command:
                              % (intent, spec.get("linger")))
         if self.linger < 0:
             raise TableError("[%s] linger cannot be negative" % intent)
+        # A `confirm` is wording, and now it is also the whole of the rule
+        # about what a model may set going: it may call anything, and a
+        # command with wording asks the person first. Withholding commands
+        # instead was tried twice and encoded consent as absence — the model
+        # could not ask for the thing, so nobody was asked either.
         self.confirm = spec.get("confirm")
-        # Whether the model may invoke this itself. `never` is the only value,
-        # because "allowed" is the default and a field with two spellings of
-        # yes invites a third.
-        #
-        # It exists because the obvious proxy was wrong. Escalations were
-        # offered every command that was not a job, on the reasoning that a
-        # job outlives its turn — but "what have you got pinned" is a job and
-        # answers in three seconds, while `pin_thing` is a job that writes a
-        # service and takes three minutes. Withholding by kind hid the fast
-        # ones and would have parked the model inside the slow one.
-        #
-        # So each command says what it is, and the rule reading them stays a
-        # rule rather than becoming a list of names kept somewhere else.
-        self.agent = spec.get("agent")
-        if self.agent not in (None, "never"):
-            raise TableError("[%s] agent must be \"never\" if present, not %r"
-                             % (intent, self.agent))
         self.timeout_ms = int(spec.get("timeout_ms", 250))
         self.offline = spec.get("offline", "refuse")
         self.args = spec.get("args", {})
