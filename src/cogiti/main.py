@@ -346,9 +346,11 @@ class Cogiti:
             "pause_service": self.pause_service,
             "remove_service": self.remove_service,
             "pin_thing": self.pin_thing,
+            "repeat": self.repeat,
+            "stop": self.stop_everything,
         }.get(cmd.job)
         if handler is not None:
-            if cmd.job == "pin_thing":
+            if cmd.job in ("pin_thing", "repeat", "stop"):
                 return await handler(cmd, decision, session_id, turn=turn)
             return await handler(cmd, decision, session_id)
         if cmd.job == "timer":
@@ -590,6 +592,50 @@ class Cogiti:
                 "say": "Done. %s is on the screen." % m.title,
                 "did": ["installed %s" % m.name, "recorded the approval"],
                 "linger": 12}
+
+    # ------------------------------------------------ saying it again, and --
+    # ------------------------------------------------ making it stop --------
+
+    async def repeat(self, _cmd, _decision, _session_id, turn=None):
+        """Say the last answer again.
+
+        The session already keeps the last few turns for prompt assembly, so
+        this needs no new state — it reads what is there. It used to escalate,
+        which sent "what did you say?" to a language model that had not said
+        anything and could only guess at what it might have been.
+        """
+        session = getattr(turn, "session", None)
+        history = getattr(session, "history", None) or []
+        # The current turn has not been recorded yet, so the last entry is the
+        # one being asked about.
+        for _said, answered in reversed(history):
+            if answered:
+                return {"type": "result", "say": answered, "linger": 12}
+        return {"type": "result", "say": "I haven't said anything yet.",
+                "linger": 8}
+
+    async def stop_everything(self, _cmd, _decision, _session_id, turn=None):
+        """"Stop." Whatever is going on, stop it.
+
+        By the time this runs the mouth is already quiet: the person speaking
+        is what interrupted it. What is left is the work they cannot see — a
+        detached escalation that will otherwise come back with an answer to a
+        question they have just abandoned.
+
+        Distinct from cancel_job, which is about a *named* piece of work and
+        asks which one. This is the blunt one, and blunt is what "stop" means.
+        """
+        running = list(self.pending.running.values())
+        if not running:
+            return {"type": "result", "say": "Nothing to stop.", "linger": 6}
+        for d in running:
+            if d.task is not None:
+                d.task.cancel()
+            self.pending.drop(d.job_id)
+        return {"type": "result",
+                "say": "Stopped." if len(running) == 1
+                       else "Stopped all %d." % len(running),
+                "did": ["cancelled %d" % len(running)], "linger": 6}
 
     async def announce(self, cmd, values):
         """Say something nobody asked for, right now.

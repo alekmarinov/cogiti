@@ -138,6 +138,40 @@ def load(**_args):
     }, ttl_s=10)
 
 
+@provider("device.battery")
+def battery(**_args):
+    """How much charge is left, if there is a battery at all.
+
+    A desktop has none, and saying so is the answer — not a guess, and not a
+    number borrowed from whatever machine the model was thinking of. This
+    intent used to escalate, which is how a device with no battery came to
+    have an opinion about its charge level.
+    """
+    import glob
+    for base in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        try:
+            with open(os.path.join(base, "capacity")) as f:
+                percent = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        status = "unknown"
+        try:
+            with open(os.path.join(base, "status")) as f:
+                status = f.read().strip().lower()
+        except OSError:
+            pass
+        return Result(values={
+            "percent": percent,
+            "percent_spoken": "%d percent" % percent,
+            "status": status,
+            "charging": status == "charging",
+        }, ttl_s=60, source=os.path.basename(base))
+    # No battery at all, which is the answer for a desktop — and the
+    # apology for `unavailable` says exactly that: "I can't do that on this
+    # device."
+    return Result.failed("unavailable")
+
+
 @provider("device.hearing")
 def hearing(**_args):
     """Whether it can hear you.

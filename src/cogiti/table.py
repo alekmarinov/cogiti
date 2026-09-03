@@ -72,7 +72,10 @@ class Command:
             "list_services", "service_status", "pause_service",
             "remove_service",
             # The one that writes a service and asks to keep it.
-            "pin_thing")
+            "pin_thing",
+            # Both need the session or the pending list, neither of which a
+            # provider in a worker thread can see.
+            "repeat", "stop")
 
     def __init__(self, intent, spec):
         self.intent = intent
