@@ -19,6 +19,21 @@ from . import phrases as _phrases
 from . import escalate
 from .turn import State, Turn
 
+
+def _single_word(text):
+    """Exactly one word. Not "noise" — that takes a resolver to decide.
+
+    Named for what it measures. The first version called this _is_noise and
+    answered True for "hello", which is not noise at all: it is a greeting the
+    resolver handles. The guard that uses this checks both, and a helper whose
+    name claims more than it tests is how the wrong one gets reused later.
+
+    Deliberately not a list of filler words. "mmm", "uh" and "hmm" are what
+    this room produces; the next one produces different ones, and a list is a
+    thing that is always slightly wrong somewhere else.
+    """
+    return len((text or "").strip().split()) == 1
+
 #: Returned by _fill_slot when the person asked to drop it. A distinct
 #: object rather than None, which already means "nothing was filled, escalate".
 CANCELLED = object()
@@ -118,6 +133,34 @@ class Session:
         turn.decision = decision
         self.cogiti.trace.decided(self, turn, decision)
         result = await self._act(turn, decision)
+
+        if (result is None and _single_word(turn.text)
+                and getattr(self.cogiti, "resolver", None) is not None):
+            # A single word that resolved to nothing is a room, not a request.
+            #
+            # Measured on a device in an ordinary hour: five of ten
+            # escalations were one or two words — "mmm" four times, "else"
+            # once — and they cost fifty-seven seconds and five model calls
+            # between them. Nobody was talking to it.
+            #
+            # Safe because every single word that *means* something already
+            # resolves: hello, stop, no, weather, time, louder, mute, thanks,
+            # bitcoin. And "yes" or "cancel" only mean anything as answers,
+            # which reach the turn that asked and never come through here.
+            #
+            # **Only when a resolver is configured**, and the existing tests
+            # are what caught that: ports.md says a deployment with no
+            # resolver escalates everything and is valid, and there the
+            # premise above is false — nothing resolves, so every single word
+            # would vanish silently and the device would look broken.
+            #
+            # Ignored rather than answered, and this is only tolerable because
+            # the transcript is on screen: the person sees "mmm" appear and
+            # nothing happen, which is feedback without the device talking
+            # back at a noise.
+            self.cogiti.trace.decided(self, turn, decision)
+            turn.to(State.IDLE)
+            return None
 
         if result is None:
             # services.md §5: before escalating, and only ever *after* the

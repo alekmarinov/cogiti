@@ -9,7 +9,7 @@ import asyncio, os, sys, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from cogiti import providers, session as session_mod, table as table_mod  # noqa: E402
-from cogiti import detach                                    # noqa: E402
+from cogiti import detach
 from cogiti.turn import State                                            # noqa: E402
 
 
@@ -276,3 +276,49 @@ class TestPresentationTemplates(unittest.TestCase):
         how a clock card asking for {date_spoken} was caught."""
         op = self.tpl(kind="text", text="{nope}").ops({})
         self.assertEqual(op["text"], "{nope}")
+
+
+class TestARoomIsNotARequest(Base):
+    """A single word the resolver made nothing of is not worth a model call.
+
+    Measured on a device in an ordinary hour: five of ten escalations were one
+    or two words — "mmm" four times, "else" once — costing fifty-seven seconds
+    and five model calls between them. Nobody was talking to it.
+    """
+
+    def with_resolver(self, decisions, commands=None):
+        c, s = self.session(decisions, commands or {})
+        c.resolver = object()      # configured; what it is does not matter
+        return c, s
+
+    async def test_a_lone_unresolved_word_is_not_escalated(self):
+        c, s = self.with_resolver({})
+        await s.utterance("mmm")
+        self.assertEqual(c.escalated, [],
+                         "a noise in the room reached the model")
+
+    async def test_two_words_still_escalate(self):
+        """Two words can be a question — "bitcoin price" is one — and the
+        cheapness of this guard is that it only ever drops a single word."""
+        c, s = self.with_resolver({})
+        await s.utterance("daily floor")
+        self.assertEqual(c.escalated, ["daily floor"])
+
+    async def test_a_lone_word_that_resolves_is_untouched(self):
+        """Every single word that means anything already resolves: hello,
+        stop, no, weather, time, louder, mute, thanks, bitcoin."""
+        c, s = self.with_resolver({"hello": FakeDecision("greeting")},
+                                  {"greeting": command("greeting",
+                                                       speak="Hello.")})
+        await s.utterance("hello")
+        self.assertEqual(c.escalated, [])
+        self.assertEqual([i for i, _ in c.ran], ["greeting"])
+
+    async def test_with_no_resolver_everything_escalates(self):
+        """ports.md: a deployment with no resolver escalates everything and is
+        valid. There this guard's premise is false — nothing resolves — so
+        every single word would vanish and the device would look broken. The
+        existing suite caught exactly this, which is why the guard asks."""
+        c, s = self.session({}, {})           # no resolver attribute at all
+        await s.utterance("anything")
+        self.assertEqual(c.escalated, ["anything"])
