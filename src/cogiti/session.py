@@ -11,6 +11,7 @@ inventing an identity would be worse than admitting there is one user.
 """
 
 import asyncio
+import sys
 
 from . import detach
 from . import escalate
@@ -175,7 +176,8 @@ class Session:
         spawns anything — so this creates nothing. It records who is waiting,
         and hands the turn a sentence to say meanwhile.
         """
-        job_id = getattr(turn, "job_id", None) or task.get_name()
+        run = getattr(turn, "agent_run", None)
+        job_id = getattr(run, "job_id", None) or task.get_name()
         d = detach.Detached(job_id, turn.text[:60], task, self)
         self.cogiti.pending.add(d)
 
@@ -205,6 +207,12 @@ class Session:
         for d, result in self.cogiti.pending.take():
             if result is None:
                 continue
+            # Said out loud, and said in the log. An answer delivered outside
+            # a turn appears in no trace, so without this the one path that
+            # speaks without being asked is also the one path with no record
+            # that it did.
+            print("(delivering %s: %s)" % (d.job_id, d.title),
+                  file=sys.stderr, flush=True)
             said = dict(result)
             # Name it. An answer arriving a minute later with no reference to
             # the question is an announcement out of nowhere.

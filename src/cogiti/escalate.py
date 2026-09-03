@@ -56,6 +56,13 @@ async def run(cogiti, session, turn):
     run = agent.AgentRun(cogiti.db, cogiti.agent_argv, "%s/%s" % session.key,
                          on_event=on_event, env=env, tool_env=tool_env)
 
+    # The turn keeps a handle on it, because a turn that stops waiting still
+    # has to be able to name what it stopped waiting for. Without this the
+    # detached job was tracked under its asyncio task name — which cancelling
+    # never matches, so stopping a job would not have stopped its answer
+    # arriving anyway a minute later.
+    turn.agent_run = run
+
     # A question from the adapter is a question for the person, now that there
     # is one. The broker answered 'nobody available' while cogiti had no user
     # loop; that was right then and is wrong now.
