@@ -80,6 +80,14 @@ class Session:
                 pass                       # it was interrupted; that is the point
             self.cogiti.trace.interrupted(self, old)
 
+        # Show what was understood, whatever port it arrived on. This lived
+        # in the speech path, so a typed utterance drew nothing — which made
+        # the caption untestable by anything except a microphone, and was a
+        # discourtesy to the text spine for no reason.
+        show = getattr(self.cogiti.output, "heard", None)
+        if show:
+            show(text)
+
         turn = Turn(self, text)
         self.current = turn
         turn._task = asyncio.ensure_future(self._run(turn))
@@ -394,9 +402,6 @@ class Session:
         """
         if not (text or "").strip():
             return None
-        show = getattr(self.cogiti.output, "heard", None)
-        if show:
-            show(text)
         return await self.utterance(text)
 
     # ------------------------------------------------------------ acting --
