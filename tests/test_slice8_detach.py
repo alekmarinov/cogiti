@@ -189,6 +189,7 @@ class TestTheAnswerArrivesUnprompted(unittest.IsolatedAsyncioTestCase):
         s = Session.__new__(Session)
         s.cogiti = Brain()
         s.current = None
+        s.history = []
 
         d = detach.Detached("j1", "the long question", None, s)
         Brain.pending.add(d)
@@ -197,6 +198,10 @@ class TestTheAnswerArrivesUnprompted(unittest.IsolatedAsyncioTestCase):
         await s._deliver_pending()
         self.assertEqual(len(said), 1, "nothing was said")
         self.assertIn("forty two", said[0])
+        self.assertEqual(s.history, [{"answered": said[0], "unprompted": True}],
+                         "said out loud and then forgotten: the one answer "
+                         "that arrives with nobody asking is also the one the "
+                         "next escalation would have no record of")
         self.assertIn("the long question", said[0],
                       "an answer arriving later must name its question")
 

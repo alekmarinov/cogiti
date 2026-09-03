@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from cogiti import config as C, db as D                        # noqa: E402
 from cogiti.main import Cogiti                                 # noqa: E402
 from cogiti.turn import State                                  # noqa: E402
+from cogiti.session import HISTORY                             # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAKE = "%s %s/fakes/agent.py" % (sys.executable, HERE)
@@ -103,6 +104,69 @@ class TestTurn(unittest.IsolatedAsyncioTestCase):
     async def test_no_agent_adapter_is_a_startup_failure(self):
         with self.assertRaises(C.ConfigError):
             cogiti_for("two-tools.json", self.tmp, agent_adapter="")
+
+
+class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
+    """The escalation context, and the four ways it used to lose an exchange.
+
+    All four were found in one live transcript. The device asked "Are you
+    sure?"; the person said "am I sure what?"; the model that answered them
+    had no record that a question had been put, because a confirm was never
+    written down and the turn that put it was interrupted, which was not
+    written down either. Everything a person witnessed has to be in here, or
+    the next thing they say arrives with half its meaning missing.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.c = cogiti_for("two-tools.json", self.tmp)
+        self.s = self.c.session()
+
+    def recent(self):
+        return self.s.context()["recent"]
+
+    async def test_a_question_the_device_put_is_recorded(self):
+        await self.s.asked(None, "Keep it on the screen from now on?")
+        self.assertEqual(self.recent(),
+                         [{"asked": "Keep it on the screen from now on?"}])
+
+    async def test_the_answer_to_it_is_recorded_as_an_answer(self):
+        """Not as a fresh utterance. "yes" on its own is meaningless; "yes",
+        against the question it answers, is the whole exchange."""
+        class Waiting:
+            question = "Delete it for good?"
+            state = State.CONFIRMING
+            def needs_answer(self):
+                return True
+            def answer(self, _v):
+                pass
+        self.s.current = Waiting()
+        self.assertTrue(await self.s.answer("go on then"))
+        self.assertEqual(self.recent(), [{"said": "go on then",
+                                          "answering": "Delete it for good?"}])
+
+    async def test_an_interrupted_turn_is_still_recorded(self):
+        """Cutting a turn short is a reason to say nothing, not a reason to
+        forget. Every `[interrupted]` in the live trace was an utterance the
+        person made and the model was never shown."""
+        from cogiti.turn import Turn
+        await self.c.start()
+        turn = Turn(self.s, "what is eth at")
+        turn.interrupted = True
+        out = io.StringIO()
+        real, sys.stdout = sys.stdout, out
+        try:
+            await self.s._run(turn)
+        finally:
+            sys.stdout = real
+        self.assertEqual(self.recent(),
+                         [{"said": "what is eth at", "interrupted": True}])
+
+    async def test_it_keeps_only_the_last_few(self):
+        for i in range(HISTORY + 4):
+            self.s.remember(said=str(i))
+        self.assertEqual(len(self.recent()), HISTORY)
+        self.assertEqual(self.recent()[-1], {"said": str(HISTORY + 3)})
 
 
 class TestConfig(unittest.TestCase):

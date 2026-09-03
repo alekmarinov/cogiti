@@ -46,8 +46,26 @@ class Session:
     def __init__(self, cogiti, speaker_id=UNKNOWN_SPEAKER, thread="main"):
         self.cogiti = cogiti
         self.key = (speaker_id, thread)
-        self.history = []           # [(text, said)], most recent last
+        self.history = []           # [{...}], most recent last
         self.current = None
+
+    def remember(self, **entry):
+        """Record one exchange for the next escalation to read.
+
+        Every hole this closes was found in one live transcript. The device
+        asked "Are you sure?", the person said "am i sure what?", and the
+        model that answered them had no idea a question had been put: the
+        confirm was never written down, and the turn that asked it was
+        interrupted, which used to mean it was never written down either.
+
+        So the four things that reach a person are the four things recorded:
+        what they said and what was answered, a question the device put, the
+        answer to it, and an answer delivered late with nobody asking. An
+        exchange the person witnessed and the model cannot see is the whole
+        of that failure, and it does not matter which of the four it was.
+        """
+        self.history.append(entry)
+        del self.history[:-HISTORY]
 
     def on_state(self, turn, state):
         self.cogiti.trace.state(self, turn, state)
@@ -114,6 +132,7 @@ class Session:
         say = getattr(self.cogiti.output, "say", None)
         if say is None:
             return
+        self.remember(asked=question)
         try:
             await say({"type": "result", "say": question, "show": question})
         except Exception:                                     # noqa: BLE001
@@ -124,6 +143,7 @@ class Session:
     async def answer(self, value):
         """The person answered a question that was put to them."""
         if self.awaiting_answer():
+            self.remember(said=value, answering=self.current.question)
             self.current.answer(value)
             return True
         return False
@@ -201,13 +221,17 @@ class Session:
                 result = self._detach(turn, running)
 
         if turn.interrupted:
+            # It still happened. Cutting a turn short is a reason to say
+            # nothing, not a reason to forget: the person spoke, the device
+            # started on it, and a model told none of that reads the next
+            # sentence as though it came out of nowhere.
+            self.remember(said=turn.text, interrupted=True)
             return None
 
         turn.result = result
         turn.to(State.SPEAKING)
         said = await self.cogiti.output.say(result)
-        self.history.append((turn.text, said))
-        del self.history[:-HISTORY]
+        self.remember(said=turn.text, answered=said)
         turn.to(State.IDLE)
 
         # The end of a turn is the one safe moment to mention work that
@@ -264,8 +288,7 @@ class Session:
         turn.result = result
         turn.to(State.SPEAKING)
         said = await self.cogiti.output.say(result)
-        self.history.append((turn.text, said))
-        del self.history[:-HISTORY]
+        self.remember(said=turn.text, answered=said)
         turn.to(State.IDLE)
         return None
 
@@ -362,6 +385,7 @@ class Session:
             if said.get("type") != "failed" and said.get("say"):
                 said["say"] = "About %s — %s" % (d.title, said["say"])
             await self.cogiti.output.say(said)
+            self.remember(answered=said.get("say", ""), unprompted=True)
 
     async def heard_partial(self, text, stable):
         """The transcript so far.
@@ -523,4 +547,4 @@ class Session:
         nothing else. Memory, identity and device defaults each arrive with the
         port or the module that owns them.
         """
-        return {"recent": [{"said": t, "answered": a} for t, a in self.history]}
+        return {"recent": list(self.history)}

@@ -22,8 +22,14 @@ question on their behalf. The list is derived from the table rather than
 written out, so an intent added later is offered or withheld by its own
 verdict and nobody has to remember this file exists.
 
-Jobs are withheld too. They outlive the turn, and a model that starts one is
-committing the device to work nobody asked for.
+**Jobs are not withheld by being jobs**, which is what this used to do and
+was wrong in both directions. "What have you got pinned" is a job because the
+registry lives on the event loop, and it answers in three seconds; `pin_thing`
+is a job because it writes a service, and it takes three minutes and asks a
+question halfway through. Withholding by kind hid the first and, had the kind
+test ever been relaxed, would have parked the model inside the second. So a
+command that must not be model-run says `agent = "never"` in its own entry,
+and this reads that.
 """
 
 #: Providers that only produce a sentence. Offering them would spend a tool
@@ -74,10 +80,12 @@ def offered(table):
     keep in step:
 
       a `confirm` wording means a *person* is meant to be asked, and a model
-      that can call it has answered on their behalf — power_off and reboot;
+      that can call it has answered on their behalf — power_off, reboot, and
+      anything that deletes what somebody built;
 
-      a `job` outlives the turn, and a model starting one commits the device
-      to work nobody asked for — every service and timer command;
+      `agent = "never"` is the entry saying so itself, for the ones no other
+      field catches: authoring a service, cancelling someone's work, and the
+      two that are about the conversation rather than the world;
 
       chatter produces a sentence and nothing else.
 
@@ -86,7 +94,7 @@ def offered(table):
     """
     out = {}
     for intent, cmd in sorted(table.commands.items()):
-        if cmd.job or cmd.confirm or cmd.provider in CHATTER:
+        if cmd.confirm or cmd.agent == "never" or cmd.provider in CHATTER:
             continue
         wants = None
         for name, spec in (cmd.args or {}).items():
@@ -97,7 +105,27 @@ def offered(table):
     return out
 
 
-def tool(offers):
+def withheld(table):
+    """What the device can do that the model may not start itself.
+
+    Offered as knowledge, not as power. Without it the model does not know
+    these exist at all: "pin the coke on the screen" reached one that had no
+    idea this device pins anything, so instead of saying the obvious thing it
+    improvised. Knowing means it can hand the request back in words that
+    work — which is the honest answer when the doing is somebody else's.
+
+    Each carries its own confirm wording where it has one, because that
+    wording already says what the thing does in a sentence meant for a person.
+    """
+    out = {}
+    for intent, cmd in sorted(table.commands.items()):
+        if intent in offered(table) or cmd.provider in CHATTER:
+            continue
+        out[intent] = cmd.confirm
+    return out
+
+
+def tool(offers, others=None):
     """The declaration. One tool with an enum, not one tool per command: a
     model choosing from twenty tool names picks the wrong one more often than
     a model choosing from one enum, and the schema stays small enough to send
@@ -105,14 +133,24 @@ def tool(offers):
     lines = []
     for intent, wants in sorted(offers.items()):
         lines.append("%s%s" % (intent, " (needs %s)" % wants if wants else ""))
+    description = (
+        "Do something on this device, or read one of its values. Use it "
+        "whenever the answer involves the device itself rather than "
+        "general knowledge — the time here, this machine's address, the "
+        "volume, a live price. Prefer it over saying what you would do. "
+        "Available: " + ", ".join(lines))
+    if others:
+        description += (
+            ". This device can also do these, but only when the person asks "
+            "for them plainly, so you cannot call them: "
+            + ", ".join("%s (it asks \"%s\")" % (i, c) if c else i
+                        for i, c in sorted(others.items()))
+            + ". If they want one, say what it is they should ask for — "
+              "never say the device cannot do it, and never pretend you did "
+              "it.")
     return {
         "name": "device",
-        "description":
-            "Do something on this device, or read one of its values. Use it "
-            "whenever the answer involves the device itself rather than "
-            "general knowledge — the time here, this machine's address, the "
-            "volume, a live price. Prefer it over saying what you would do. "
-            "Available: " + ", ".join(lines),
+        "description": description,
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -130,7 +168,7 @@ def tool(offers):
     }
 
 
-async def run(cogiti, offers, args):
+async def run(cogiti, offers, args, session_id=None, turn=None):
     """Run one, and tell the model plainly what happened.
 
     Returns what the provider produced, not a sentence: the model is writing
@@ -153,7 +191,15 @@ async def run(cogiti, offers, args):
                 "problem": "%s needs %s — call it again with that" % (intent,
                                                                       wants)}
     slots = {wants: Slot(argument)} if wants and argument else {}
-    result = await cogiti.run_command(cmd, Decision(intent, slots))
+    decision = Decision(intent, slots)
+    if cmd.job:
+        # A reporting job — the slow ones are withheld — so it is awaited like
+        # any other command. `start_job` wants the turn because some of these
+        # read the session it was asked in.
+        result = await cogiti.start_job(cmd, decision, session_id, turn=turn)
+    else:
+        result = await cogiti.run_command(cmd, decision)
+    result = result or {}
 
     if result.get("type") == "failed":
         return {"ok": False, "problem": result.get("message", "it failed")}

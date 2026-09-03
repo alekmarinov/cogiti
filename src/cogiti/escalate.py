@@ -26,7 +26,7 @@ def device_grant(cogiti):
     offers = device_tool.offered(cogiti.table)
     if not offers:
         return None, {}
-    return device_tool.tool(offers), offers
+    return device_tool.tool(offers, device_tool.withheld(cogiti.table)), offers
 
 
 def grants(cogiti, text):
@@ -86,7 +86,8 @@ async def run(cogiti, session, turn):
     if device is not None:
         tools = list(tools) + [device]
         run.local_tools["device"] = (
-            lambda args: device_tool.run(cogiti, offers, args))
+            lambda args: device_tool.run(cogiti, offers, args,
+                                         "%s/%s" % session.key, turn))
 
     # The turn keeps a handle on it, because a turn that stops waiting still
     # has to be able to name what it stopped waiting for. Without this the

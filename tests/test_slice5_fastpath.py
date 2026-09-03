@@ -347,11 +347,29 @@ class TestTheDeviceIsOfferedToTheModel(unittest.TestCase):
                                             "confirm": "Shut down?"}})
         self.assertEqual(offers, {})
 
-    def test_a_job_is_withheld(self):
-        """It outlives the turn, and a model starting one commits the device
-        to work nobody asked for."""
-        offers = self.offers({"pin_thing": {"job": "pin_thing"}})
+    def test_a_job_that_only_reports_is_offered(self):
+        """Being a job is not the test, and using it as one was wrong in both
+        directions. "What have you got pinned" is a job because the registry
+        lives on the event loop, and it answers in three seconds — withholding
+        it hid a thing the device does well from the part of it that gets
+        asked in sentences the resolver misses."""
+        offers = self.offers({"list_services": {"job": "list_services"}})
+        self.assertIn("list_services", offers)
+
+    def test_a_job_that_says_never_is_withheld(self):
+        """`pin_thing` is the other direction: a job that writes a service,
+        takes three minutes and asks a question halfway through. Nothing about
+        its kind says that, so its entry says it."""
+        offers = self.offers({"pin_thing": {"job": "pin_thing",
+                                            "agent": "never"}})
         self.assertEqual(offers, {})
+
+    def test_agent_takes_only_never(self):
+        """Because "allowed" is the default, and a field with two spellings of
+        yes invites a third."""
+        with self.assertRaises(table_mod.TableError) as e:
+            table_mod.Command("x", {"job": "stop", "agent": "sometimes"})
+        self.assertIn("must be", str(e.exception))
 
     def test_chatter_is_withheld(self):
         offers = self.offers({"greeting": {"provider":
@@ -363,6 +381,23 @@ class TestTheDeviceIsOfferedToTheModel(unittest.TestCase):
             "provider": "price.spot",
             "args": {"symbol": {"slot": "symbol", "required": True}}}})
         self.assertEqual(offers["get_price"], "symbol")
+
+    def test_what_it_may_not_do_is_still_told_to_it(self):
+        """Knowledge, not power. "Pin the coke on the screen" reached a model
+        that did not know this device pins anything, so rather than saying the
+        obvious thing it improvised. Naming them lets it hand the request back
+        in words that work."""
+        from cogiti import device_tool
+        t = table_mod.Table({k: table_mod.Command(k, v) for k, v in {
+            "get_time": {"provider": "clock.now"},
+            "pin_thing": {"job": "pin_thing", "confirm": "Keep it up?"},
+        }.items()})
+        self.assertEqual(device_tool.withheld(t), {"pin_thing": "Keep it up?"})
+        d = device_tool.tool(device_tool.offered(t),
+                             device_tool.withheld(t))["description"]
+        self.assertIn("pin_thing (it asks \"Keep it up?\")", d)
+        self.assertNotIn("pin_thing", d[:d.index("also")])
+        self.assertEqual(d.count("pin_thing"), 1, "offered as well as named")
 
     def test_the_declaration_lists_what_each_needs(self):
         from cogiti import device_tool
