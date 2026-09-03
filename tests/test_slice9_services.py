@@ -172,6 +172,20 @@ class TestTheBroker(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ok)
         self.assertIn("https", why)
 
+    def test_a_declared_host_that_resolves_inside_is_still_refused(self):
+        """The standard shape of a server-side request forgery: the service
+        declares a name the user approved, and the name resolves to the
+        network the device is sitting on. trust.py has refused this since
+        slice 1; the broker was not calling it."""
+        ok, why = broker._permitted("https://localhost/x", ["localhost"])
+        self.assertFalse(ok)
+        self.assertIn("not a global address", why)
+
+    def test_a_literal_private_address_is_refused_even_if_declared(self):
+        ok, why = broker._permitted("https://127.0.0.1/x", ["127.0.0.1"])
+        self.assertFalse(ok)
+        self.assertIn("non-global", why)
+
     def test_an_empty_allow_list_permits_nothing(self):
         ok, _ = broker._permitted("https://api.example.com/x", [])
         self.assertFalse(ok)

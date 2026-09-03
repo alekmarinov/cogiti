@@ -31,6 +31,8 @@ import socket
 import urllib.error
 import urllib.request
 
+from . import trust
+
 V = 1
 
 #: A service is pinning a number on a screen. Anything slower than this is not
@@ -119,12 +121,24 @@ class Broker:
 
 
 def _permitted(url, allow):
-    """Whether this service declared this host.
+    """Whether this service declared this host, and whether the host is safe.
 
     https only, and the host must be listed exactly. No wildcards: a service
     that declares `*.example.com` has declared a namespace somebody else can
     register in, and the review gate in 5b reads these aloud — "anything under
     example.com" is not a sentence a person can approve meaningfully.
+
+    **The private-address check is `trust.check`'s and not a second copy.**
+    This function originally did its own host matching and stopped there,
+    which left the standard shape of a server-side request forgery wide open:
+    a service declares `metadata.example.com`, that name resolves to
+    169.254.169.254 or 127.0.0.1, and an allow-list entry the user approved
+    becomes a way into the network the device is sitting on. `trust.py` has
+    refused that since slice 1 and this simply did not call it.
+
+    `allow_private` stays False. A service is a standing duty pinned to a
+    screen; nothing about that needs the local network, and the grant exists
+    for a user asking about their own printer.
     """
     from urllib.parse import urlparse
     u = urlparse(url)
@@ -133,9 +147,15 @@ def _permitted(url, allow):
     host = (u.hostname or "").lower()
     if not host:
         return False, "no host in that url"
+    # Exact, not trust's pattern match: a manifest is approved by ear and
+    # "anything under example.com" is not a sentence a person can weigh.
     if host not in [h.lower() for h in allow]:
         return False, ("%s is not in this service's allow-list (%s)"
                        % (host, ", ".join(allow) or "empty"))
+    try:
+        trust.check(url, [host], allow_private=False)
+    except trust.EgressDenied as e:
+        return False, str(e)
     return True, ""
 
 
