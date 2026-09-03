@@ -686,3 +686,42 @@ class TestTheServiceCanReachItsOwnDirectory(unittest.TestCase):
         open(os.path.join(d, "main.py"), "w").close()
         services.own(d, None)          # must not raise
         self.assertTrue(os.path.exists(os.path.join(d, "main.py")))
+
+
+class TestTheUndoBinIsBounded(unittest.TestCase):
+    """The device says "I've kept it for thirty days". Nothing deleted
+    anything, so the sentence was half true — it kept them, and kept them for
+    ever. A spoken promise with no mechanism misleads whichever way you rely
+    on it: expect cleanup and the disk fills, expect it gone and it is still
+    there."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+
+    def aged(self, name, days):
+        import time as _t
+        d = os.path.join(self.root, name)
+        os.makedirs(d)
+        open(os.path.join(d, "service.toml"), "w").close()
+        when = _t.time() - days * 86400
+        os.utime(d, (when, when))
+        return d
+
+    def test_it_reclaims_what_is_past_its_promise(self):
+        self.aged("clock-20260801T101010", 40)
+        gone = services.sweep_removed(self.root)
+        self.assertEqual(gone, ["clock-20260801T101010"])
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_it_keeps_what_is_still_inside_it(self):
+        """Twenty-nine days is still undoable, and the whole point is that a
+        misheard removal can be taken back."""
+        self.aged("weather-20260901T101010", 29)
+        self.assertEqual(services.sweep_removed(self.root), [])
+        self.assertEqual(len(os.listdir(self.root)), 1)
+
+    def test_an_absent_bin_is_not_an_error(self):
+        """Nothing has ever been removed on this device. That is the common
+        case, not a fault."""
+        self.assertEqual(
+            services.sweep_removed(os.path.join(self.root, "nope")), [])

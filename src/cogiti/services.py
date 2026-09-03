@@ -67,6 +67,46 @@ PAUSED = "paused"
 SERVICE_USER = "cogiti-service"
 
 
+#: How long a removed service is kept. `docs/services.md` §7: removal is a
+#: voice command and voice commands are misheard, so there is an undo — and it
+#: is bounded, because an appliance that never reclaims disk is one that
+#: eventually stops.
+KEEP_REMOVED_DAYS = 30
+
+
+def sweep_removed(removed_root, days=KEEP_REMOVED_DAYS, on_warn=None):
+    """Delete what has been in the undo bin longer than its promise.
+
+    The device says "I've kept it for thirty days" out loud. Nothing deleted
+    anything, so the sentence was half true: it kept them, and kept them
+    forever. A spoken promise with no mechanism behind it misleads whichever
+    way you rely on it — expect cleanup and the disk fills, expect it gone and
+    it is still there.
+
+    Ages are read from the directory's own mtime, which is when it was moved
+    here: the move is the removal, and nothing writes to it afterwards.
+    """
+    if not os.path.isdir(removed_root):
+        return []
+    cutoff = time.time() - days * 86400
+    gone = []
+    for name in sorted(os.listdir(removed_root)):
+        path = os.path.join(removed_root, name)
+        try:
+            if not os.path.isdir(path) or os.stat(path).st_mtime >= cutoff:
+                continue
+            shutil.rmtree(path)
+        except OSError as e:
+            if on_warn:
+                on_warn("cannot reclaim %s: %s" % (path, e))
+            continue
+        gone.append(name)
+    if gone and on_warn:
+        on_warn("reclaimed %d removed service(s) older than %d days: %s"
+                % (len(gone), days, ", ".join(gone)))
+    return gone
+
+
 def prepare_dirs(state_dir, *dirs):
     """Make the state directory traversable, and the service trees readable.
 

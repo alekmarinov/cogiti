@@ -718,6 +718,13 @@ class Cogiti:
         # sequenced against the renderer on purpose: the SDK reconnects, so a
         # service starting first is a thing to survive rather than to order,
         # and ordering it would make the boot as slow as its slowest member.
+        # The undo bin, bounded. Swept at startup rather than on a timer: a
+        # device that has been off for a month should reclaim on the next boot,
+        # and nothing here is urgent enough to need a clock of its own.
+        _services.sweep_removed(
+            self.removed_root,
+            on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True))
+
         installed = self.services.load()
         for sv in self.services.services.values():
             self.register_manifest(sv.m)
