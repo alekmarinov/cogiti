@@ -8,8 +8,25 @@ Tools and hosts are decided here, before the job starts, from what the user
 asked for — never widened later because something the agent read suggested it.
 """
 
+from . import device_tool
 from . import secrets
 from .adapters import agent
+
+
+def device_grant(cogiti):
+    """The device's own commands, as a tool the model may call.
+
+    Without this an escalation could only talk about the device. "Turn it up a
+    bit, would you" in a sentence the resolver does not match got an agreeable
+    answer and no change in volume — the device knew how, and the part of it
+    that was listening had no way to say so.
+    """
+    if cogiti.table is None:
+        return None, {}
+    offers = device_tool.offered(cogiti.table)
+    if not offers:
+        return None, {}
+    return device_tool.tool(offers), offers
 
 
 def grants(cogiti, text):
@@ -43,7 +60,13 @@ async def run(cogiti, session, turn):
     tool_env = secrets.env_for(state, {})
 
     def on_event(e):
-        cogiti.trace.event(session, turn, e)
+        # While the turn lives its events belong to the turn; once it has
+        # detached they belong to the job, whose row is still open.
+        job = getattr(getattr(turn, "agent_run", None), "job_id", None)
+        if job and turn.state.value == "idle":
+            cogiti.trace.job_event(job, e)
+        else:
+            cogiti.trace.event(session, turn, e)
         # A thought is the only agent event with somewhere to go on a screen.
         # Routed here rather than inside the adapter because what is worth
         # showing is a presentation decision, and the adapter must not have
@@ -55,6 +78,15 @@ async def run(cogiti, session, turn):
 
     run = agent.AgentRun(cogiti.db, cogiti.agent_argv, "%s/%s" % session.key,
                          on_event=on_event, env=env, tool_env=tool_env)
+
+    # The device itself, as a tool. Answered here rather than run as a
+    # subprocess: a command is a function call away and spawning a process to
+    # ask the time would be absurd.
+    device, offers = device_grant(cogiti)
+    if device is not None:
+        tools = list(tools) + [device]
+        run.local_tools["device"] = (
+            lambda args: device_tool.run(cogiti, offers, args))
 
     # The turn keeps a handle on it, because a turn that stops waiting still
     # has to be able to name what it stopped waiting for. Without this the

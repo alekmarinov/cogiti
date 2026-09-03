@@ -296,7 +296,13 @@ class Session:
         spawns anything — so this creates nothing. It records who is waiting,
         and hands the turn a sentence to say meanwhile.
         """
-        self._track(turn, task, turn.text[:60])
+        d = self._track(turn, task, turn.text[:60])
+        # The row stays open under the job's name, so what the model does
+        # after the turn ends is still written down. Without it a detached
+        # escalation showed no tools at all — it had called one and the trace
+        # was flushed five seconds before it did.
+        if d is not None:
+            self.cogiti.trace.detached(self, turn, d.job_id)
         return {"type": "result", "say": detach.STILL_WORKING, "linger": 0}
 
     def _track(self, turn, task, title):
@@ -315,6 +321,8 @@ class Session:
                     "message": "that job failed: %s" % t.exception()})
             else:
                 self.cogiti.pending.done(d.job_id, t.result())
+            self.cogiti.trace.job_done(
+                d.job_id, "cancelled" if t.cancelled() else "done")
             # A slot just opened. This is the only moment one does.
             asyncio.ensure_future(self.start_queued())
             # And say it, if nobody is talking. Delivery used to happen only

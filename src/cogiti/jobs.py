@@ -26,6 +26,10 @@ LIMITS = {
 
 TERM_GRACE_S = 5.0      # SIGTERM, then this long, then SIGKILL
 
+#: And this long for the KILL to land before anything is called an escape.
+#: A signal is queued, not delivered, when killpg returns.
+KILL_GRACE_S = 2.0
+
 
 class Backpressure(Exception):
     """Over a cap. The caller queues; it does not refuse and does not
@@ -112,6 +116,12 @@ def cancel(db, job_id, reason="cancelled"):
         _signal_group(pgid, signal.SIGTERM)
         if not _group_gone(pgid, TERM_GRACE_S):
             _signal_group(pgid, signal.SIGKILL)
+            # And wait for it to land. killpg returns when the signal is
+            # queued, not when the process is gone, so verifying straight
+            # afterwards counts something that is in the act of dying as an
+            # escape. That is what made this test flaky: it passed on an idle
+            # machine and reported a false escape on a loaded one.
+            _group_gone(pgid, KILL_GRACE_S)
         _reap()
         survivors = _group_members(pgid)
         if survivors:
@@ -151,6 +161,7 @@ async def cancel_async(db, job_id, reason="cancelled"):
         _signal_group(pgid, signal.SIGTERM)
         if not await _group_gone_async(pgid, TERM_GRACE_S):
             _signal_group(pgid, signal.SIGKILL)
+            await _group_gone_async(pgid, KILL_GRACE_S)
         _reap()
         survivors = _group_members(pgid)
         if survivors:

@@ -322,3 +322,51 @@ class TestARoomIsNotARequest(Base):
         c, s = self.session({}, {})           # no resolver attribute at all
         await s.utterance("anything")
         self.assertEqual(c.escalated, ["anything"])
+
+
+class TestTheDeviceIsOfferedToTheModel(unittest.TestCase):
+    """An escalation could only talk about the device. "Turn it up a bit,
+    would you" in a sentence the resolver does not match got an agreeable
+    answer and no change in volume."""
+
+    def offers(self, spec):
+        from cogiti import device_tool
+        t = table_mod.Table({k: table_mod.Command(k, v)
+                             for k, v in spec.items()})
+        return device_tool.offered(t)
+
+    def test_a_reading_is_offered(self):
+        offers = self.offers({"get_time": {"provider": "clock.now"}})
+        self.assertIn("get_time", offers)
+
+    def test_anything_needing_consent_is_withheld(self):
+        """A confirm exists because a person should be asked, and a model that
+        can call it has answered on their behalf."""
+        offers = self.offers({"power_off": {"provider": "shell.run",
+                                            "command": ["true"],
+                                            "confirm": "Shut down?"}})
+        self.assertEqual(offers, {})
+
+    def test_a_job_is_withheld(self):
+        """It outlives the turn, and a model starting one commits the device
+        to work nobody asked for."""
+        offers = self.offers({"pin_thing": {"job": "pin_thing"}})
+        self.assertEqual(offers, {})
+
+    def test_chatter_is_withheld(self):
+        offers = self.offers({"greeting": {"provider":
+                                           "conversation.acknowledge"}})
+        self.assertEqual(offers, {})
+
+    def test_a_required_slot_is_advertised(self):
+        offers = self.offers({"get_price": {
+            "provider": "price.spot",
+            "args": {"symbol": {"slot": "symbol", "required": True}}}})
+        self.assertEqual(offers["get_price"], "symbol")
+
+    def test_the_declaration_lists_what_each_needs(self):
+        from cogiti import device_tool
+        t = device_tool.tool({"get_time": None, "get_price": "symbol"})
+        self.assertIn("get_price (needs symbol)", t["description"])
+        self.assertEqual(sorted(t["input_schema"]["properties"]["command"]
+                                ["enum"]), ["get_price", "get_time"])
