@@ -206,6 +206,19 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
         for word in ("stop", "cancel that", "wait", "never mind"):
             self.assertFalse(bare_answer(word), word)
 
+    async def test_a_holding_line_is_not_recorded_as_an_answer(self):
+        """"I'm still working on that" went into the history as the device's
+        reply, so the model read itself saying it — and a stall phrase is a
+        thing this device says *instead* of speaking. Seen in a dump: one
+        assistant turn holding the holding line and the real answer, joined."""
+        self.s.remember(said="who is peter", answered=None, pending=True)
+        self.s.remember(answered="About who is peter — your son.",
+                        unprompted=True)
+        self.assertEqual(self.recent(), [
+            {"said": "who is peter", "answered": None, "pending": True},
+            {"answered": "About who is peter — your son.",
+             "unprompted": True}])
+
     async def test_it_keeps_only_the_last_few(self):
         for i in range(HISTORY + 4):
             self.s.remember(said=str(i))

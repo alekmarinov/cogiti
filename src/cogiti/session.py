@@ -61,7 +61,13 @@ def bare_answer(text):
     """
     word = (text or "").strip().strip(".,!?;:").lower()
     return word in BARE_ANSWERS
-HISTORY = 6                     # turns of context an escalation is given
+#: Exchanges an escalation is given. Six while every one of them was
+#: re-rendered as prose inside a single user message and paid for in full on
+#: every turn. They are a real message array now and the stable half of the
+#: request is cached, so depth costs almost nothing — and six was visibly too
+#: few: it is about two minutes of talking, after which the device forgets a
+#: name it was told.
+HISTORY = 20
 
 
 class Session:
@@ -70,6 +76,7 @@ class Session:
         self.key = (speaker_id, thread)
         self.history = []           # [{...}], most recent last
         self.current = None
+        self._last_turn_ns = None
 
     def remember(self, **entry):
         """Record one exchange for the next escalation to read.
@@ -86,8 +93,10 @@ class Session:
         exchange the person witnessed and the model cannot see is the whole
         of that failure, and it does not matter which of the four it was.
         """
+        import time as _time
         self.history.append(entry)
         del self.history[:-HISTORY]
+        self._last_turn_ns = _time.monotonic_ns()
 
     def on_state(self, turn, state):
         self.cogiti.trace.state(self, turn, state)
@@ -176,6 +185,7 @@ class Session:
     # --------------------------------------------------------------- run --
 
     async def _run(self, turn):
+        detached = False
         turn.to(State.RESOLVING)
 
         # The fast path. A resolver that always escalates is also valid and is
@@ -243,6 +253,7 @@ class Session:
                 # whole point of the stage — and the answer is delivered when
                 # it arrives, by _delivers().
                 result = self._detach(turn, running)
+                detached = True
 
         if turn.interrupted:
             # It still happened. Cutting a turn short is a reason to say
@@ -255,7 +266,16 @@ class Session:
         turn.result = result
         turn.to(State.SPEAKING)
         said = await self.cogiti.output.say(result)
-        self.remember(said=turn.text, answered=said)
+        # A holding line is not an answer, and it must not be recorded as
+        # one. "I'm still working on that" went into the history as the
+        # device's reply, so the model read itself saying it and would
+        # eventually have learnt to say it unprompted — a stall phrase is a
+        # thing this device says *instead* of speaking, not a thing it said.
+        # The real answer arrives later through _deliver_pending, naming the
+        # question it belongs to.
+        self.remember(said=turn.text,
+                      answered=None if detached else said,
+                      **({"pending": True} if detached else {}))
         turn.to(State.IDLE)
 
         # The end of a turn is the one safe moment to mention work that
@@ -594,10 +614,46 @@ class Session:
     def context(self):
         """What an escalation is told beyond the utterance itself.
 
-        Deliberately small. `prompt.context` was left undefined in the agent
-        protocol so its shape could come from the first real prompt rather than
-        from a guess, and this is that first prompt: the recent turns, and
-        nothing else. Memory, identity and device defaults each arrive with the
-        port or the module that owns them.
+        `prompt.context` was left undefined in the agent protocol so its shape
+        could come from real prompts rather than a guess. It is two things: the
+        exchanges, and where the device is standing while it has them.
         """
-        return {"recent": list(self.history)}
+        return {"recent": list(self.history), "situation": self.situation()}
+
+    def situation(self):
+        """Where the device is, when it is, and what is in front of it.
+
+        The model knew none of this. It could *fetch* the time by spending a
+        tool call, so "is it getting late?" cost a round trip to learn
+        something the device has always known — and questions like "is that
+        still up?" had nothing to refer to at all.
+
+        Everything here is cheap and local: a clock, a hostname, and a list
+        the supervisor already holds. Nothing that needs the network belongs
+        in a block assembled on every escalation.
+        """
+        import time as _time
+        out = {"time": _time.strftime("%H:%M"),
+               "date": _time.strftime("%A %d %B %Y")}
+        # Who is talking. `unknown` until a perception adapter says otherwise,
+        # and said plainly rather than left out: a model that is not told it
+        # does not know who this is will happily assume.
+        out["speaker"] = self.key[0]
+        try:
+            from . import readings
+            name = readings.read("hostname")
+            if name:
+                out["device"] = name
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            live = self.cogiti._svc()
+            out["pinned"] = [s.m.title for s in live]
+        except Exception:                                     # noqa: BLE001
+            pass
+        if self._last_turn_ns:
+            gap = (_time.monotonic_ns() - self._last_turn_ns) // 1_000_000_000
+            # A gap is the difference between a follow-up and a fresh start,
+            # and "and at sunset?" means nothing without it.
+            out["since_last_s"] = int(gap)
+        return out
