@@ -19,11 +19,13 @@ being killed every minute forever.
 
 import asyncio
 import os
+import pwd
 import resource
 import shutil
 import signal
 import time
 
+from . import approval as _approval
 from . import manifest as _manifest
 
 #: Where the SDK is, so a service can import it.
@@ -58,7 +60,29 @@ NEEDS_ATTENTION = "needs-attention"
 PAUSED = "paused"
 
 
-def _rlimits(m):
+#: The account a service runs as. services.md §1: a service has a uid. One
+#: shared account rather than one each — real isolation between services is
+#: more, and this is the part that matters most, because without it a service
+#: can simply open /var/lib/cogiti/secrets.
+SERVICE_USER = "cogiti-service"
+
+
+def service_uid():
+    """The uid and gid to drop to, or None if the account is not there.
+
+    None is a real answer and not an error: a development checkout has no such
+    user, and refusing to run services there would make them untestable on the
+    machine they are written on. What must not happen is *silently* running as
+    root while believing otherwise — so the caller says which it got.
+    """
+    try:
+        e = pwd.getpwnam(SERVICE_USER)
+    except KeyError:
+        return None
+    return e.pw_uid, e.pw_gid
+
+
+def _rlimits(m, ids=None):
     """Applied in the child, between fork and exec.
 
     setrlimit rather than a cgroup because this must work on an appliance with
@@ -67,6 +91,15 @@ def _rlimits(m):
     descriptors, and the number of processes it may become.
     """
     def apply():
+        # Order matters and is the usual trap: the group first, then the
+        # supplementary groups, then the user. Dropping the uid first loses
+        # the privilege needed to do the rest, and the result is a process
+        # that kept the group it should not have.
+        if ids is not None:
+            uid, gid = ids
+            os.setgid(gid)
+            os.setgroups([gid])
+            os.setuid(uid)
         mb = m.limits["memory_mb"] * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (mb, mb))
         n = m.limits["open_files"]
@@ -111,7 +144,8 @@ class Supervised:
 class Services:
     """The supervisor. One per cogiti."""
 
-    def __init__(self, root, on_warn=None, broker=None):
+    def __init__(self, root, on_warn=None, broker=None, drop_privileges=True):
+        self.ids = service_uid() if drop_privileges else None
         self.root = root
         self.on_warn = on_warn or (lambda m: None)
         self.broker = broker
@@ -121,6 +155,12 @@ class Services:
     # ------------------------------------------------------------- load --
 
     def load(self):
+        if self.ids is None and os.geteuid() == 0:
+            # Said once, loudly. A device running services as root while its
+            # manifest format promises a uid is a device whose security
+            # description is wrong, and nobody would find out by looking.
+            self.on_warn("no %s account: services will run as root"
+                         % SERVICE_USER)
         found, broken = _manifest.load_all(self.root)
         self.broken = broken
         for msg in broken:
@@ -155,6 +195,25 @@ class Services:
         s = self.services.get(name)
         if s is None or s.alive:
             return s
+
+        # §4: a service whose files no longer match its approval does not
+        # start. The case this guards is an agent editing a service it wrote
+        # last week — which is a new approval, not a continuation of the old
+        # one — and the manifest is covered as well as the code, because a
+        # service that widens its phrase list has changed what the device
+        # hears without moving a line.
+        #
+        # Services that were installed by hand carry no approval and are
+        # allowed: 5a shipped two of them, and a rule that stopped the device
+        # from running what its owner put there by hand would be a rule about
+        # the wrong thing.
+        if _approval.load(s.m.dir) is not None:
+            ok, why = _approval.verify(s.m.dir)
+            if not ok:
+                s.state = NEEDS_ATTENTION
+                s.detail = why
+                self.on_warn("%s will not start: %s" % (name, why))
+                return s
         env = dict(os.environ)
         env["COGITI_SERVICE"] = s.m.name
         env["COGITI_SERVICE_DIR"] = s.m.dir
@@ -171,7 +230,7 @@ class Services:
                 *s.m.argv, cwd=s.m.dir, env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                preexec_fn=_rlimits(s.m))
+                preexec_fn=_rlimits(s.m, self.ids))
         except OSError as e:
             s.state = NEEDS_ATTENTION
             s.detail = "will not start: %s" % e

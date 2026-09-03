@@ -7,7 +7,7 @@ make 5b reviewable.
 import asyncio, os, sys, tempfile, textwrap, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from cogiti import broker, manifest, services                 # noqa: E402
+from cogiti import authoring, broker, manifest, services                 # noqa: E402
 
 
 def write(root, name, toml, main="import time\nwhile True: time.sleep(1)\n"):
@@ -141,6 +141,53 @@ class TestTheSupervisor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(os.listdir(removed)), 1)
 
 
+class TestApproval(unittest.IsolatedAsyncioTestCase):
+    """services.md §4: the approval binds to the code and the manifest."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.warnings = []
+
+    def sup(self):
+        s = services.Services(self.root, on_warn=self.warnings.append,
+                              drop_privileges=False)
+        s.load()
+        return s
+
+    async def test_an_edited_service_does_not_start(self):
+        from cogiti import approval
+        d = write(self.root, "clock", GOOD)
+        approval.record(d, "spoken", [], [], [])
+        with open(os.path.join(d, "main.py"), "a") as f:
+            f.write("\n# somebody edited this\n")
+        s = self.sup()
+        await s.start("clock")
+        self.assertEqual(s.services["clock"].state, services.NEEDS_ATTENTION)
+        self.assertIn("code has changed", s.services["clock"].detail)
+
+    async def test_a_widened_manifest_is_a_new_decision(self):
+        """No code moved, and what the device hears has changed. §4 hashes the
+        manifest for exactly this."""
+        from cogiti import approval
+        d = write(self.root, "clock", GOOD)
+        approval.record(d, "spoken", [], [], [])
+        with open(os.path.join(d, "service.toml"), "a") as f:
+            f.write('\n[phrases]\npatterns = ["what time is it"]\n')
+        s = self.sup()
+        await s.start("clock")
+        self.assertEqual(s.services["clock"].state, services.NEEDS_ATTENTION)
+        self.assertIn("manifest has changed", s.services["clock"].detail)
+
+    async def test_a_hand_installed_service_needs_no_approval(self):
+        """5a shipped two by hand. A rule that stopped the device running what
+        its owner put there would be a rule about the wrong thing."""
+        write(self.root, "clock", GOOD)
+        s = self.sup()
+        await s.start("clock")
+        self.assertTrue(s.services["clock"].alive)
+        await s.stop("clock")
+
+
 class TestTheBroker(unittest.IsolatedAsyncioTestCase):
     """The allow-list is enforced here or nowhere: a service is a separate
     process, and anything it can do to a socket of its own it can do to any
@@ -193,3 +240,113 @@ class TestTheBroker(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAuthoring(unittest.IsolatedAsyncioTestCase):
+    """services.md §4. Steps 3 and 4 exist so step 5 is a decision about
+    purpose rather than about code."""
+
+    def setUp(self):
+        self.staging = tempfile.mkdtemp()
+
+    def stage(self, toml=None, main=None):
+        d = os.path.join(self.staging, "eth")
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "service.toml"), "w").write(textwrap.dedent(
+            toml or '''
+            name = "eth"
+            title = "the ETH price"
+            exec = ["python3", "main.py"]
+            interval_s = 1
+            '''))
+        open(os.path.join(d, "main.py"), "w").write(textwrap.dedent(
+            main or '''
+            from cogiti.service import Service, every
+            svc = Service()
+
+            @every(1)
+            def tick():
+                svc.show(kind="text", text="x")
+
+            svc.run()
+            '''))
+        return d
+
+    async def test_a_working_service_passes_and_produces_updates(self):
+        d = self.stage()
+        m, updates = await authoring.vet(d)
+        self.assertGreaterEqual(len(updates), authoring.REQUIRED_UPDATES)
+        self.assertEqual(m.name, "eth")
+
+    async def test_a_forbidden_import_never_gets_run(self):
+        """Static checks come first on purpose: reading the source costs
+        milliseconds and running unknown code costs ninety seconds and
+        whatever the code does."""
+        d = self.stage(main="import subprocess\n")
+        with self.assertRaises(authoring.Rejected) as e:
+            await authoring.vet(d)
+        self.assertIn("subprocess", str(e.exception))
+
+    async def test_a_service_that_reaches_an_undeclared_host_is_refused(self):
+        """Its description would be wrong, and the description is the thing
+        the user is approving."""
+        d = self.stage(main=textwrap.dedent('''
+            from cogiti.service import Service, every
+            svc = Service()
+
+            @every(1)
+            async def tick():
+                await svc.get_json("https://sneaky.example/x")
+
+            svc.run()
+            '''))
+        with self.assertRaises(authoring.Rejected) as e:
+            await authoring.vet(d)
+        self.assertIn("sneaky.example", str(e.exception))
+
+    async def test_a_service_that_pins_nothing_is_refused(self):
+        """A service that runs and shows nothing has produced no duty. It
+        never reaches the person."""
+        d = self.stage(main="import time\nwhile True: time.sleep(1)\n")
+        with self.assertRaises(authoring.Rejected) as e:
+            await authoring.vet(d)
+        self.assertIn("update", str(e.exception))
+
+    async def test_a_service_that_exits_immediately_is_refused(self):
+        d = self.stage(main="pass\n")
+        with self.assertRaises(authoring.Rejected) as e:
+            await authoring.vet(d)
+        self.assertIn("stopped on its own", str(e.exception))
+
+    def test_the_gate_names_the_host_the_interval_and_every_phrase(self):
+        """§4: the phrases are part of the decision, not a detail of it. They
+        decide which sentences stop going to the model."""
+        from cogiti import manifest as _m
+        d = self.stage(toml='''
+            name = "eth"
+            title = "the ETH price"
+            exec = ["python3", "main.py"]
+            interval_s = 60
+            [network]
+            allow = ["api.coingecko.com"]
+            [phrases]
+            patterns = ["eth price", "what is eth at"]
+            ''')
+        said = authoring.review(_m.load(os.path.join(d, "service.toml")), [])
+        self.assertIn("api.coingecko.com", said)
+        self.assertIn("every minute", said)
+        self.assertIn("no passwords", said)
+        self.assertIn("'eth price'", said)
+        self.assertIn("'what is eth at'", said)
+        self.assertTrue(said.endswith("Shall I keep it?"), said)
+
+    async def test_installing_records_what_was_said(self):
+        from cogiti import approval
+        d = self.stage()
+        m, _ = await authoring.vet(d)
+        root = tempfile.mkdtemp()
+        spoken = "I've written a thing. Shall I keep it?"
+        dest = authoring.install(d, root, m, spoken)
+        ok, why = approval.verify(dest)
+        self.assertTrue(ok, why)
+        self.assertEqual(approval.load(dest)["spoken"], spoken)
