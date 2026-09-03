@@ -87,12 +87,26 @@ class Turn:
 
     # -------------------------------------------------------- confirming --
 
-    #: Words that mean yes. Deliberately a small closed set, matched exactly:
-    #: anything not on it is a no, and the cost of that asymmetry is a person
-    #: repeating themselves rather than a device doing something irreversible
-    #: because it half-heard "no, wait".
-    YES = frozenset(("yes", "yeah", "yep", "yes please", "go ahead", "do it",
-                     "confirm", "ok", "okay", "sure"))
+    #: Words that mean yes.
+    #:
+    #: Matched exactly, this was too brittle for speech. Watched live:
+    #: somebody answered "I am sure", then "I'm sure I want you to", and
+    #: neither was a yes — "sure" is on the list and those sentences are not,
+    #: so each became a new utterance and asked the question again. Four
+    #: attempts, no service.
+    #:
+    #: So a sentence counts as yes when it contains one of these **and no
+    #: negation at all**. The asymmetry the exact match was protecting is
+    #: kept by the second half, not the first: the danger was never an
+    #: unusual phrasing, it was half-hearing "no, wait" — and "no, wait"
+    #: carries a negation, so it cannot pass however it is phrased.
+    YES = frozenset(("yes", "yeah", "yep", "yup", "go ahead", "do it",
+                     "confirm", "ok", "okay", "sure", "please do", "correct"))
+
+    #: Any of these anywhere in the answer and it is not a yes, whatever else
+    #: it contains. "yes but not that" is not consent to what was asked.
+    NEGATIONS = frozenset(("no", "not", "don't", "dont", "never", "cancel",
+                           "stop", "wait", "nevermind", "nope", "hold"))
 
     #: Words that abandon whatever was asked. "Cancel" and "never mind" always
     #: leave — a question must never be a trap the user has to answer to escape.
@@ -132,7 +146,20 @@ class Turn:
         said = await self._ask(question, State.CONFIRMING, timeout_s)
         if said is None:
             return False
-        return str(said).strip().lower().rstrip(".!") in self.YES
+        return self.means_yes(said)
+
+    @classmethod
+    def means_yes(cls, said):
+        """A yes word present, and no negation anywhere."""
+        words = [w.strip(".,!?;:") for w in
+                 str(said or "").strip().lower().split()]
+        if any(w in cls.NEGATIONS for w in words):
+            return False
+        if any(w in cls.YES for w in words):
+            return True
+        # Two-word forms that are one idea: "yes please", "please do".
+        joined = " ".join(words)
+        return any(y in joined for y in cls.YES if " " in y)
 
     async def ask_slot(self, question, timeout_s=12.0):
         """Ask for one missing slot. Returns what was said, or None to abandon.

@@ -725,3 +725,36 @@ class TestTheUndoBinIsBounded(unittest.TestCase):
         case, not a fault."""
         self.assertEqual(
             services.sweep_removed(os.path.join(self.root, "nope")), [])
+
+
+class TestWhatCountsAsYes(unittest.TestCase):
+    """Matched exactly, the yes list was too brittle for speech.
+
+    Watched live: somebody answered "I am sure", then "I'm sure I want you
+    to", and neither was a yes — "sure" is on the list and those sentences are
+    not, so each became a new utterance and asked the question again. Four
+    attempts, no service, and visible frustration.
+    """
+
+    def test_natural_confirmations_are_yes(self):
+        from cogiti.turn import Turn
+        for said in ("yes", "sure", "i am sure", "i'm sure i want you to",
+                     "ok", "okay", "go ahead", "please do", "yeah do it",
+                     "yes please", "correct"):
+            self.assertTrue(Turn.means_yes(said), said)
+
+    def test_anything_with_a_negation_is_not(self):
+        """The asymmetry the exact match protected is kept here, not in the
+        list: the danger was never an unusual phrasing, it was half-hearing
+        "no, wait" — and that carries a negation however it is phrased."""
+        from cogiti.turn import Turn
+        for said in ("no", "no wait", "not now", "don't", "cancel", "stop",
+                     "never mind", "nope", "hold on", "yes but not that",
+                     "maybe", "what?", ""):
+            self.assertFalse(Turn.means_yes(said), said)
+
+    def test_a_confirm_still_expires_into_no(self):
+        """Of every confirm in the system this is the one that matters most:
+        the thing on the other side of it is power_off."""
+        from cogiti.turn import Turn
+        self.assertFalse(Turn.means_yes(None))
