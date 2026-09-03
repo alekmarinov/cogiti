@@ -126,7 +126,9 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
         return self.s.context()["recent"]
 
     async def test_a_question_the_device_put_is_recorded(self):
-        await self.s.asked(None, "Keep it on the screen from now on?")
+        from cogiti.turn import Turn
+        await self.s.asked(Turn(self.s, "pin the clock"),
+                           "Keep it on the screen from now on?")
         self.assertEqual(self.recent(),
                          [{"asked": "Keep it on the screen from now on?"}])
 
@@ -134,7 +136,8 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
         """Not as a fresh utterance. "yes" on its own is meaningless; "yes",
         against the question it answers, is the whole exchange."""
         class Waiting:
-            question = "Delete it for good?"
+            text = "delete the bitcoin service"
+            question = "Remove it? I can put it back for a month."
             state = State.CONFIRMING
             def needs_answer(self):
                 return True
@@ -142,8 +145,9 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
                 pass
         self.s.current = Waiting()
         self.assertTrue(await self.s.answer("go on then"))
-        self.assertEqual(self.recent(), [{"said": "go on then",
-                                          "answering": "Delete it for good?"}])
+        self.assertEqual(self.recent(), [{
+            "said": "go on then",
+            "answering": "Remove it? I can put it back for a month."}])
 
     async def test_an_interrupted_turn_is_still_recorded(self):
         """Cutting a turn short is a reason to say nothing, not a reason to
@@ -173,6 +177,7 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
         """
         answered = []
         class Waiting:
+            text = "pin bitcoin price on screen"
             question = "Keep it on the screen from now on?"
             state = State.CONFIRMING
             def needs_answer(self):

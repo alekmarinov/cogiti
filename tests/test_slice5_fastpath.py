@@ -33,6 +33,7 @@ class FakeTrace:
     def decided(self, *a): pass
     def event(self, *a): pass
     def interrupted(self, *a): pass
+    def exchange(self, *a, **k): pass
 
 
 class FakeOutput:

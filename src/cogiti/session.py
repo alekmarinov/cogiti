@@ -155,6 +155,7 @@ class Session:
         if say is None:
             return
         self.remember(asked=question)
+        self.cogiti.trace.exchange(self, turn, question=question)
         try:
             await say({"type": "result", "say": question, "show": question})
         except Exception:                                     # noqa: BLE001
@@ -166,6 +167,7 @@ class Session:
         """The person answered a question that was put to them."""
         if self.awaiting_answer():
             self.remember(said=value, answering=self.current.question)
+            self.cogiti.trace.exchange(self, self.current, answer=value)
             self.current.answer(value)
             return True
         return False

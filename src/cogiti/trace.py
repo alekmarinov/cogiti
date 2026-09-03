@@ -40,6 +40,30 @@ class Trace:
         if state.value == "idle" and len(row["states"]) > 1:
             self._write(turn, row, "done")
 
+    def exchange(self, session, turn, question=None, answer=None):
+        """A question the device put, and what came back.
+
+        Neither was written down anywhere. `remove the bitcoin service` was
+        asked four times in a row and never completed, and the row said only
+        `confirming, speaking, idle` — which is the same shape whether nobody
+        answered, somebody said no, or somebody said yes and it was misheard.
+        Three different faults, one indistinguishable trace.
+
+        A confirm is the one exchange where the device speaks first, so it is
+        also the one the transcript misses by construction: the answer never
+        becomes a turn.
+        """
+        # Recording must never be able to end a turn. There is no turn at all
+        # when a question is put outside one, and a trace that raises there
+        # would take the question with it.
+        if turn is None or id(turn) in self._moved:
+            return
+        row = self._row(session, turn)
+        if question is not None:
+            row.setdefault("questions", []).append(question)
+        if answer is not None:
+            row.setdefault("answers", []).append(answer)
+
     def decided(self, session, turn, decision):
         """What the fast path made of the utterance.
 
