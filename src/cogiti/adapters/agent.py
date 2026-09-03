@@ -56,6 +56,12 @@ class AgentRun:
         self.proc = None
         self._write_lock = asyncio.Lock()
         self._tools = set()          # outstanding asyncio tasks
+        # Tools cogiti answers itself rather than running as a subprocess.
+        # `propose_service` is the first: it hands cogiti a filled-in form and
+        # gets back either "installed" or the one thing that was wrong with
+        # it, which is how the model's three attempts (services.md §8) happen
+        # without any retry machinery existing.
+        self.local_tools = {}
 
     # --------------------------------------------------------------- run --
 
@@ -181,6 +187,12 @@ class AgentRun:
                 # through, and asking anyway is a security event.
                 trust.audit(self.db, self.job_id, "ungranted-tool", str(name))
                 raise PermissionError("tool %r was not granted to this job" % name)
+
+            if name in self.local_tools:
+                value = await self.local_tools[name](req.get("args") or {})
+                await self._send({"type": "tool_result", "id": tid,
+                                  "ok": True, "value": value})
+                return
 
             if name not in TOOL_RUNNERS:
                 raise PermissionError("no runner for tool %r" % name)

@@ -350,3 +350,73 @@ class TestAuthoring(unittest.IsolatedAsyncioTestCase):
         ok, why = approval.verify(dest)
         self.assertTrue(ok, why)
         self.assertEqual(approval.load(dest)["spoken"], spoken)
+
+
+class TestTheForm(unittest.IsolatedAsyncioTestCase):
+    """The model fills a form; cogiti owns the code. services.md §4 step 2,
+    with the decision that the model never writes Python at all."""
+
+    def spec(self, **over):
+        return dict({"name": "eth-price", "title": "the ETH price",
+                     "url": "https://api.coingecko.com/api/v3/simple/price",
+                     "path": ["ethereum", "usd"], "format": "ETH ${value}",
+                     "interval_s": 60, "phrases": ["eth price"]}, **over)
+
+    def test_the_generated_code_passes_the_static_checks(self):
+        """The template must not trip its own net — and it is checked like
+        anything else, because a mistake in a template is a mistake in every
+        service made from it."""
+        from cogiti import service_template, static_checks, manifest as _m
+        spec = service_template.validate(self.spec())
+        code, man = service_template.render(spec)
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "main.py"), "w").write(code)
+        open(os.path.join(d, "service.toml"), "w").write(man)
+        m = _m.load(os.path.join(d, "service.toml"))
+        self.assertEqual(static_checks.check(code, m), {"api.coingecko.com"})
+
+    def test_the_allow_list_comes_from_the_url_it_was_given(self):
+        """Derived, not declared twice: the code and its description cannot
+        disagree about which host is reached."""
+        from cogiti import service_template, manifest as _m
+        spec = service_template.validate(
+            self.spec(url="https://api.open-meteo.com/v1/forecast"))
+        _code, man = service_template.render(spec)
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "service.toml"), "w").write(man)
+        self.assertEqual(_m.load(os.path.join(d, "service.toml")).allow,
+                         ["api.open-meteo.com"])
+
+    def test_a_model_supplied_string_cannot_become_code(self):
+        """The one place its text reaches the program is inside a literal."""
+        from cogiti import service_template
+        spec = service_template.validate(
+            self.spec(format='{value}"; import os; os.system("x")  #'))
+        code, _man = service_template.render(spec)
+        import ast
+        tree = ast.parse(code)                      # it still parses
+        self.assertNotIn("os.system", [
+            n.func.attr for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)])
+
+    def test_too_many_phrases_are_refused_because_they_are_read_aloud(self):
+        from cogiti import service_template
+        with self.assertRaises(service_template.BadSpec) as e:
+            service_template.validate(self.spec(phrases=["a", "b", "c", "d",
+                                                         "e", "f", "g"]))
+        self.assertIn("read aloud", str(e.exception))
+
+    async def test_a_bad_form_is_one_complaint_at_a_time(self):
+        """The model is going to fix it and try again; five complaints is a
+        rewrite that addresses none of them properly."""
+        from cogiti import service_template
+        with self.assertRaises(service_template.BadSpec) as e:
+            service_template.validate(self.spec(url="http://x", interval_s=1))
+        self.assertEqual(str(e.exception).count("must"), 1)
+
+    async def test_a_filled_form_becomes_two_files_on_disk(self):
+        root = tempfile.mkdtemp()
+        d, spec = await authoring.from_spec(self.spec(), root)
+        self.assertTrue(os.path.exists(os.path.join(d, "main.py")))
+        self.assertTrue(os.path.exists(os.path.join(d, "service.toml")))
+        self.assertEqual(spec["name"], "eth-price")

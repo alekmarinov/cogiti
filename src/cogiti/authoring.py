@@ -29,8 +29,54 @@ import tempfile
 import time
 
 from . import manifest as _manifest
+from . import service_template as _template
 from . import services as _services
 from . import static_checks
+
+#: What the model is asked to fill in. Declared here rather than in the
+#: adapter because the shape of a service is cogiti's business — the adapter
+#: passes it through and never learns what a service is.
+PROPOSE_TOOL = {
+    "name": "propose_service",
+    "description":
+        "Propose a service that fetches a JSON document and keeps one value "
+        "from it on screen. Call this exactly once. If it comes back with a "
+        "problem, fix that one thing and call it again.",
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name", "title", "url", "path", "format", "interval_s"],
+        "properties": {
+            "name": {"type": "string",
+                     "description": "short id, lowercase and hyphens, e.g. eth-price"},
+            "title": {"type": "string",
+                      "description": "what the device calls it out loud, e.g. "
+                                     "'the ETH price'"},
+            "url": {"type": "string",
+                    "description": "https url returning JSON"},
+            "path": {"type": "array", "items": {"type": "string"},
+                     "description": "where the value is in that document, as "
+                                    "keys, e.g. ['ethereum','usd']"},
+            "format": {"type": "string",
+                       "description": "how it appears on screen; must contain "
+                                      "{value}, e.g. 'ETH ${value}'"},
+            "interval_s": {"type": "integer",
+                           "description": "how often to refresh, in seconds"},
+            "phrases": {"type": "array", "items": {"type": "string"},
+                        "description": "up to 6 sentences the user might say "
+                                       "to reach it. These are read aloud for "
+                                       "approval, so keep them specific."},
+        },
+    },
+}
+
+SYSTEM = (
+    "You are configuring a small display service for a voice appliance. You "
+    "do not write code: call propose_service with the details and the device "
+    "builds it. Choose a public JSON endpoint that needs no API key. If you "
+    "do not know one that certainly exists, say so instead of guessing — a "
+    "service pointing at a url that does not answer is worse than none."
+)
 
 #: §8: three, then it gives up and says so. An agent that can retry without
 #: limit against a checker eventually produces something that passes the
@@ -204,6 +250,29 @@ def _every(seconds):
 
 
 # --------------------------------------------------------------- steps --
+
+async def from_spec(spec, staging_root):
+    """Steps 2: the form becomes two files. Raises BadSpec or Rejected.
+
+    The model never writes Python. What it supplies reaches the running
+    program only inside a string literal, put there by repr(), and the
+    manifest's allow-list is derived from the url it gave rather than
+    declared separately — so the code and its description cannot disagree
+    about which host is reached.
+    """
+    spec = _template.validate(spec)
+    code, man = _template.render(spec)
+    d = os.path.join(staging_root, spec["name"])
+    if os.path.exists(d):
+        raise Rejected("a service called %s is already being written"
+                       % spec["name"])
+    os.makedirs(d)
+    with open(os.path.join(d, "main.py"), "w") as f:
+        f.write(code)
+    with open(os.path.join(d, "service.toml"), "w") as f:
+        f.write(man)
+    return d, spec
+
 
 async def vet(staging_dir, broker_path=None):
     """Steps 3 and 4, in the order that fails cheapest first.
