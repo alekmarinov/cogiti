@@ -20,7 +20,9 @@ from . import broker as _broker
 from . import detach
 from . import jobs
 from .adapters import agent, audi, presentation, resolver
+from . import phrases as _phrases
 from . import present
+from . import phrases as _phrases
 from . import presentation_templates as templates
 from . import providers
 from . import secrets
@@ -545,6 +547,21 @@ class Cogiti:
         staged, m, _updates = author.ready
         spoken = _authoring.review(m, _updates)
 
+        # Say which of its phrases it will never actually get. Built-ins win,
+        # so a sentence the resolver already recognises never reaches a
+        # service — and a manifest that lists one is describing something that
+        # will not happen. Better said now, while it is still a question,
+        # than discovered later by it not working.
+        taken = _phrases.unreachable(m.phrases, self.resolve)
+        if taken:
+            spoken = spoken.replace(
+                " Shall I keep it?",
+                " I won't get %s — %s already mean%s something else. "
+                "Shall I keep it anyway?"
+                % (" or ".join("'%s'" % p for p in taken),
+                   "those" if len(taken) > 1 else "that",
+                   "" if len(taken) > 1 else "s"))
+
         # The gate, as a confirm — not `turn.ask`, which hands back the
         # turn's existing answer future. That future had already been resolved
         # by the "are you sure?" a minute earlier, so awaiting it returned that
@@ -723,6 +740,32 @@ class Cogiti:
         return caps
 
     # ------------------------------------------------------- the pinned --
+
+    def answer_from_service(self, text):
+        """A sentence an installed service claimed, answered with its value.
+
+        None when nothing claimed it, which is every sentence until somebody
+        installs a service — so this costs one dictionary walk over a handful
+        of phrases on the way to an escalation that was going to take seconds.
+
+        The value comes from the service's own report rather than from the
+        screen: cogiti is not a display and does not read one. If a service
+        has not shown anything yet there is nothing to say, and saying so is
+        better than an empty sentence.
+        """
+        installed = [sv.m for sv in self.services.services.values()]
+        if not installed:
+            return None
+        m = _phrases.match(text, installed)
+        if m is None:
+            return None
+        value = (self.broker.values.get(m.name) if self.broker else None)
+        if not value:
+            return {"type": "result",
+                    "say": "%s hasn't got a reading yet." % m.title,
+                    "linger": 8}
+        return {"type": "result", "say": "%s: %s." % (m.title, value),
+                "did": ["answered from %s" % m.name], "linger": 12}
 
     def register_manifest(self, m):
         """Let the broker answer for this manifest, installed or not."""

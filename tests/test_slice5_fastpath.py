@@ -58,6 +58,11 @@ class FakeCogiti:
     def resolve(self, text):
         return self.decisions.get(text)
 
+    def answer_from_service(self, _text):
+        """Nothing is installed in these tests, which is the ordinary case:
+        no service claims any sentence."""
+        return None
+
     async def run_command(self, cmd, decision):
         args, _prov = cmd.bind(decision)
         self.ran.append((cmd.intent, args))

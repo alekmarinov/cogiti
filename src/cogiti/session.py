@@ -15,6 +15,7 @@ import sys
 
 from . import detach
 from . import jobs
+from . import phrases as _phrases
 from . import escalate
 from .turn import State, Turn
 
@@ -117,6 +118,14 @@ class Session:
         turn.decision = decision
         self.cogiti.trace.decided(self, turn, decision)
         result = await self._act(turn, decision)
+
+        if result is None:
+            # services.md §5: before escalating, and only ever *after* the
+            # resolver has had its say. A service born this afternoon must not
+            # be able to take a sentence a built-in owns, so this is reached
+            # only when the built-ins produced nothing at all — which is what
+            # "built-ins always win a tie" means when there is no scoring.
+            result = self.cogiti.answer_from_service(turn.text)
 
         if result is None:
             turn.to(State.THINKING)

@@ -50,6 +50,9 @@ class Broker:
         self.services = services          # name -> Manifest, looked up live
         self.on_warn = on_warn or (lambda m: None)
         self.server = None
+        #: name -> the last thing that service put on screen. A cache of what
+        #: is already visible, so it can also be spoken.
+        self.values = {}
 
     async def start(self):
         # Replace a socket left by a previous run. A stale one is not a
@@ -88,6 +91,14 @@ class Broker:
                 # but not a fetch either.
                 return await self._say(writer, ok=False,
                                        error="no such service: %r" % name)
+
+            if req.get("op") == "value":
+                # What the service is currently showing, so the device can say
+                # it. Stored and not forwarded anywhere: cogiti is not a
+                # display, and this is a fact about a service rather than
+                # something to draw.
+                self.values[name] = str(req.get("text", ""))[:200]
+                return await self._say(writer, ok=True)
 
             if req.get("op") != "fetch":
                 return await self._say(writer, ok=False,

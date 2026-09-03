@@ -100,6 +100,14 @@ class Service:
         full.setdefault("fallback", str(op.get("text", ""))[:120])
         self._shown[id] = full
         self._send(full)
+        # And tell cogiti what it says. This is the first thing a service
+        # reports upward, and it exists so the device can answer "what's the
+        # bitcoin price" out loud instead of telling you to look at a corner
+        # of the screen. The screen already has it; the point is that cogiti
+        # does not, because a service draws to the renderer directly.
+        text = op.get("text")
+        if text is not None:
+            self._tell_cogiti(str(text))
 
     def _send(self, op):
         if self._sock is None:
@@ -157,6 +165,27 @@ class Service:
             except (BrokenPipeError, ConnectionError, OSError, AttributeError):
                 self.log("the renderer went away; reconnecting")
                 self._sock = None
+
+    def _tell_cogiti(self, text):
+        """Best effort, and never in the way of showing it.
+
+        A service whose cogiti has gone away is still a service: it keeps
+        drawing, and what it loses is being answerable by voice until cogiti
+        comes back. Failing the show for the sake of the report would be the
+        wrong way round.
+        """
+        if not self.broker:
+            return
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect(self.broker)
+            s.sendall((json.dumps({"v": V, "service": self.name,
+                                   "op": "value", "text": text},
+                                  separators=(",", ":")) + "\n").encode())
+            s.close()
+        except OSError:
+            pass
 
     # ------------------------------------------------------ the network --
 

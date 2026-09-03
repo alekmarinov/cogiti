@@ -17,6 +17,11 @@ class FakeCogiti:
         self.pending = detach.Pending()
         self.db = db
 
+    def answer_from_service(self, _text):
+        """Nothing is installed in these tests, which is the ordinary case:
+        no service claims any sentence."""
+        return None
+
 
 class TestHuman(unittest.TestCase):
     """Spoken aloud, so it rounds the way a person would."""
