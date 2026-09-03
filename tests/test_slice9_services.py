@@ -420,3 +420,116 @@ class TestTheForm(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(os.path.exists(os.path.join(d, "main.py")))
         self.assertTrue(os.path.exists(os.path.join(d, "service.toml")))
         self.assertEqual(spec["name"], "eth-price")
+
+
+class TestTheGate(unittest.IsolatedAsyncioTestCase):
+    """services.md §4 steps 5 and 6. Nothing is installed without a yes."""
+
+    async def test_only_a_yes_installs_it(self):
+        """Turn.YES is a small closed set and anything outside it is a no.
+        Here that asymmetry is at its most valuable: the cost of getting it
+        wrong is a service the user did not ask for, running for ever."""
+        from cogiti.turn import Turn
+        for answer in ("yes", "go ahead", "sure"):
+            self.assertIn(answer, Turn.YES)
+        for answer in ("no", "maybe", "wait", "what?", "", "yes but not that"):
+            self.assertNotIn(answer, Turn.YES)
+
+    async def test_a_second_proposal_after_a_good_one_is_refused(self):
+        """One service per request. A model that proposes twice has changed
+        its mind after being told the first one works, and the user is about
+        to be read a sentence about a specific thing."""
+        root = tempfile.mkdtemp()
+
+        class FakeCogiti:
+            broker_path = None
+        a = authoring.Author(FakeCogiti(), root)
+        a.ready = ("dir", "manifest", [])
+        out = await a.propose({"name": "x"})
+        self.assertFalse(out["ok"])
+        self.assertIn("already", out["problem"])
+
+    async def test_a_bad_form_comes_back_with_one_problem_and_a_count(self):
+        """The retry loop is the model calling the tool again. It is told what
+        was wrong and how many tries remain, and nothing here loops."""
+        root = tempfile.mkdtemp()
+
+        class FakeCogiti:
+            broker_path = None
+        a = authoring.Author(FakeCogiti(), root)
+        out = await a.propose({"name": "Bad Name", "title": "t",
+                               "url": "https://x.example", "path": ["a"],
+                               "format": "{value}", "interval_s": 60})
+        self.assertFalse(out["ok"])
+        self.assertIn("lowercase", out["problem"])
+        self.assertEqual(out["attempts_left"], authoring.MAX_ATTEMPTS - 1)
+
+    async def test_it_gives_up_after_three(self):
+        root = tempfile.mkdtemp()
+
+        class FakeCogiti:
+            broker_path = None
+        a = authoring.Author(FakeCogiti(), root)
+        bad = {"name": "Bad Name", "title": "t", "url": "https://x.example",
+               "path": ["a"], "format": "{value}", "interval_s": 60}
+        for _ in range(authoring.MAX_ATTEMPTS):
+            await a.propose(bad)
+        out = await a.propose(bad)
+        self.assertIn("last of", out["problem"])
+
+
+class TestTheGateIsAsked(unittest.IsolatedAsyncioTestCase):
+    """The gate must ask its own question.
+
+    It once did not. `Turn.ask` hands back the turn's existing answer future,
+    which the "are you sure?" a minute earlier had already resolved with
+    "yes" — so awaiting it returned that yes instantly and the gate approved
+    itself with the answer to a different question. A service was installed
+    without anybody being asked, which is the single thing this stage exists
+    to prevent.
+    """
+
+    async def test_a_second_question_in_one_turn_is_asked_again(self):
+        import asyncio
+        from cogiti.turn import Turn, State
+
+        asked = []
+
+        class FakeSession:
+            def on_state(self, _turn, _state):
+                pass
+
+            async def asked(self, _turn, question):
+                asked.append(question)
+
+        t = Turn(FakeSession(), "keep the price on screen")
+        t.trace = None
+
+        # First question, answered yes — the "did you mean from now on?".
+        first = asyncio.ensure_future(t.confirm("Are you sure?", timeout_s=5))
+        await asyncio.sleep(0.05)
+        t.answer("yes")
+        self.assertTrue(await first)
+
+        # The gate. Nobody answers it.
+        second = asyncio.ensure_future(t.confirm("Shall I keep it?",
+                                                 timeout_s=0.2))
+        self.assertFalse(await second, "the gate reused the earlier yes")
+        self.assertEqual(asked, ["Are you sure?", "Shall I keep it?"],
+                         "the gate did not put its own question")
+
+    async def test_the_gate_expires_into_no(self):
+        """A confirm never times out into yes — and of every confirm in the
+        system this is the one where that matters most."""
+        import asyncio
+        from cogiti.turn import Turn
+
+        class FakeSession:
+            def on_state(self, _turn, _state):
+                pass
+
+            async def asked(self, _turn, _question):
+                pass
+
+        t = Turn(FakeSession(), "keep it on screen")
+        self.assertFalse(await t.confirm("Shall I keep it?", timeout_s=0.1))

@@ -25,6 +25,7 @@ import json
 import os
 import shutil
 import socket
+import sys
 import tempfile
 import time
 
@@ -321,3 +322,63 @@ def install(staging_dir, services_root, m, spoken):
     entry = next(a for a in m.argv if a.endswith(".py"))
     approval.record(dest, spoken, m.phrases, m.allow, m.secrets, entry=entry)
     return dest
+
+
+# ------------------------------------------------------- the whole thing --
+
+class Author:
+    """One authoring request: the model fills the form, cogiti judges it.
+
+    The retry loop is not a loop in this file. The model calls
+    `propose_service`; if what it sent will not do, the reason goes back as the
+    tool's result and it calls again — which is `services.md` §8's three
+    attempts happening through the protocol that already existed, with no
+    retry machinery written for it.
+    """
+
+    def __init__(self, cogiti, staging_root):
+        self.cogiti = cogiti
+        self.staging_root = staging_root
+        self.attempts = 0
+        self.ready = None            # (staging_dir, manifest) once vetted
+
+    async def propose(self, args):
+        """The tool. Returns what the model is told; never raises at it."""
+        if self.ready is not None:
+            return {"ok": False,
+                    "problem": "you have already proposed one that works; "
+                               "call answer now"}
+        self.attempts += 1
+        if self.attempts > MAX_ATTEMPTS:
+            return {"ok": False,
+                    "problem": "that was the last of %d attempts" % MAX_ATTEMPTS}
+
+        staged = None
+        name = None
+        try:
+            staged, spec = await from_spec(args, self.staging_root)
+            name = spec["name"]
+            # The broker has to answer for it during the dry run. It is not
+            # installed and never may be — that is what the dry run decides —
+            # so it is registered for the length of the run and forgotten
+            # after, whichever way it goes.
+            self.cogiti.register_manifest(_manifest.load(
+                os.path.join(staged, "service.toml")))
+            m, updates = await vet(staged, self.cogiti.broker_path)
+        except (_template.BadSpec, Rejected, _manifest.ManifestError) as e:
+            if staged:
+                shutil.rmtree(staged, ignore_errors=True)
+            if name:
+                self.cogiti.forget_manifest(name)
+            # Logged as well as returned. The model is told what was wrong and
+            # the user is not, so without this the only trace of three failed
+            # attempts is the sentence saying there were three.
+            print("(authoring: %s)" % e, file=sys.stderr, flush=True)
+            # One thing, in words it can act on. It has %d tries left, and a
+            # wall of complaints is a rewrite that fixes none of them.
+            return {"ok": False, "problem": str(e),
+                    "attempts_left": MAX_ATTEMPTS - self.attempts}
+        self.ready = (staged, m, updates)
+        return {"ok": True,
+                "note": "it runs and pins a value. Call answer now; the user "
+                        "will be asked whether to keep it."}

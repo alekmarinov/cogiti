@@ -366,8 +366,11 @@ class Session:
         if cmd.job:
             # Started, not awaited. The whole point of a job is that the turn
             # ends and it keeps going.
+            # The turn goes with it: a job that has to ask something — the
+            # review gate is one — needs the turn that is asking, and every
+            # other kind ignores it.
             return await self.cogiti.start_job(cmd, decision,
-                                               "%s/%s" % self.key)
+                                               "%s/%s" % self.key, turn=turn)
         return await self.cogiti.run_command(cmd, decision)
 
     async def _fill_slot(self, turn, decision):

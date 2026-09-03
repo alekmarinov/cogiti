@@ -70,7 +70,9 @@ class Command:
             # Standing duties, for the same reason: the supervisor and the
             # manifest live on the loop, and a provider does not.
             "list_services", "service_status", "pause_service",
-            "remove_service")
+            "remove_service",
+            # The one that writes a service and asks to keep it.
+            "pin_thing")
 
     def __init__(self, intent, spec):
         self.intent = intent

@@ -8,12 +8,14 @@ text-driven orchestrator". You type; it escalates; it answers.
 import argparse
 import asyncio
 import os
+import shutil
 import signal
 import sys
 import time
 
 from . import config as _config
 from . import db as _db
+from . import authoring as _authoring
 from . import broker as _broker
 from . import detach
 from . import jobs
@@ -276,6 +278,10 @@ class Cogiti:
             on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True),
             broker=self.broker_path)
         self.broker = None
+        # What the broker will answer for. A live mapping rather than a copy,
+        # because a service being vetted is registered here for the length of
+        # its dry run and must be reachable while it is.
+        self.service_manifests = {}
         self.timers = timers.Timers(self)
         self.resolver = self._build_resolver(cfg)
         self.table = self._build_table(cfg)
@@ -318,7 +324,7 @@ class Cogiti:
             return None
         return self.resolver.resolve(text)
 
-    async def start_job(self, cmd, decision, session_id):
+    async def start_job(self, cmd, decision, session_id, turn=None):
         """An intent that outlives its turn. Only timers, for now."""
         args, _prov = cmd.bind(decision)
         if cmd.job == "cancel_timer":
@@ -333,8 +339,11 @@ class Cogiti:
             "service_status": self.service_status,
             "pause_service": self.pause_service,
             "remove_service": self.remove_service,
+            "pin_thing": self.pin_thing,
         }.get(cmd.job)
         if handler is not None:
+            if cmd.job == "pin_thing":
+                return await handler(cmd, decision, session_id, turn=turn)
             return await handler(cmd, decision, session_id)
         if cmd.job == "timer":
             seconds = int(args.get("duration") or 0)
@@ -499,6 +508,68 @@ class Cogiti:
         return {"type": "result", "say": "Stopped %s." % r["title"],
                 "did": ["cancelled %s" % r["title"]], "linger": 8}
 
+    async def pin_thing(self, _cmd, _decision, session_id, turn=None):
+        """"Keep the eth price on screen." services.md §4, end to end.
+
+        The user has already said yes once — pin_thing is `confirm`, so this
+        only runs for a standing want they have confirmed is standing. What
+        follows is the model filling a form, the device proving the result
+        works, and then **the second question**, which is the one that
+        matters: it names what the thing does, what it reads, and every
+        sentence it will answer to, and installs nothing until it is answered.
+        """
+        want = getattr(turn, "text", "") or ""
+        staging = os.path.join(self.config["state_dir"], "staging")
+        os.makedirs(staging, exist_ok=True)
+
+        author = _authoring.Author(self, staging)
+        prompt = {"text": "%s\n\nThey said: %s" % (_authoring.SYSTEM, want)}
+
+        env = secrets.env_for(self.config["state_dir"],
+                              self.config.secret_grants())
+        run = agent.AgentRun(self.db, self.agent_argv, str(session_id),
+                             env=env, tool_env=secrets.env_for(
+                                 self.config["state_dir"], {}))
+        run.local_tools["propose_service"] = author.propose
+        await run.run(prompt, [_authoring.PROPOSE_TOOL], {"wall_ms": 180000})
+
+        if author.ready is None:
+            # It never got one past the checks. Say so rather than inventing a
+            # reason: the model was told what was wrong each time and the user
+            # was not, so the honest answer is short.
+            return {"type": "result",
+                    "say": "I couldn't build that one. It took %d tries and "
+                           "none of them worked." % author.attempts,
+                    "linger": 12}
+
+        staged, m, _updates = author.ready
+        spoken = _authoring.review(m, _updates)
+
+        # The gate, as a confirm — not `turn.ask`, which hands back the
+        # turn's existing answer future. That future had already been resolved
+        # by the "are you sure?" a minute earlier, so awaiting it returned that
+        # yes instantly and **the gate approved itself with the answer to a
+        # different question**. It installed a service without asking, which is
+        # the one thing this stage exists to prevent.
+        #
+        # `confirm` makes a fresh future, says the question out loud, and never
+        # times out into yes — it expires into no, silently, which is the
+        # correct way for a review gate to be ignored.
+        approved = await turn.confirm(spoken, timeout_s=30.0) \
+            if turn is not None else False
+        if not approved:
+            shutil.rmtree(staged, ignore_errors=True)
+            return {"type": "result", "say": "Fine — I've thrown it away.",
+                    "linger": 8}
+
+        dest = _authoring.install(staged, self.services_root, m, spoken)
+        self.services.load()
+        await self.services.start(m.name)
+        return {"type": "result",
+                "say": "Done. %s is on the screen." % m.title,
+                "did": ["installed %s" % m.name, "recorded the approval"],
+                "linger": 12}
+
     async def announce(self, cmd, values):
         """Say something nobody asked for, right now.
 
@@ -631,12 +702,20 @@ class Cogiti:
         # service starting first is a thing to survive rather than to order,
         # and ordering it would make the boot as slow as its slowest member.
         installed = self.services.load()
+        for sv in self.services.services.values():
+            self.register_manifest(sv.m)
+
+        # The broker starts whether or not anything is installed. It is how a
+        # service reaches the network, and a service being *written* needs it
+        # during its dry run — which is exactly the moment there are no
+        # installed services to justify starting it. Three authoring attempts
+        # failed on this: no broker, so no fetch, so no updates, so refused.
+        self.broker = _broker.Broker(
+            self.broker_path, self.service_manifests,
+            on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True))
+        await self.broker.start()
+
         if installed:
-            self.broker = _broker.Broker(
-                self.broker_path,
-                {n: sv.m for n, sv in self.services.services.items()},
-                on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True))
-            await self.broker.start()
             await self.services.start_all()
             self._sampler = asyncio.ensure_future(self.services.run_sampler())
             print("services: %s" % ", ".join(installed), file=sys.stderr,
@@ -644,6 +723,13 @@ class Cogiti:
         return caps
 
     # ------------------------------------------------------- the pinned --
+
+    def register_manifest(self, m):
+        """Let the broker answer for this manifest, installed or not."""
+        self.service_manifests[m.name] = m
+
+    def forget_manifest(self, name):
+        self.service_manifests.pop(name, None)
 
     def _svc(self):
         return list(self.services.services.values())
