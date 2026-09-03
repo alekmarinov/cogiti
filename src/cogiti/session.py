@@ -431,8 +431,24 @@ class Session:
         Only genuinely empty. Where the line falls for a *short* transcript is
         a judgement about this room and this microphone, and it belongs in the
         resolver's thresholds rather than hidden in a guard here.
+
+        **And a pending question takes it.** The typed loop has always done
+        this; the microphone never did, so a confirm could not be answered by
+        voice at all. "Pin bitcoin price on screen" — "Keep it on the screen
+        from now on?" — "yes, please": the yes arrived here, started a fresh
+        turn, interrupted the turn that was waiting for it, and went to the
+        model, which was asked out of nowhere to react to somebody agreeing
+        to nothing.
+
+        `heard_start` already refuses to barge in on a question, which is the
+        same fix one event earlier and was landed alone. It stops the person
+        *beginning* to speak from cancelling the question and does nothing
+        about what they then say.
         """
         if not (text or "").strip():
+            return None
+        if self.awaiting_answer():
+            await self.answer(text)
             return None
         return await self.utterance(text)
 

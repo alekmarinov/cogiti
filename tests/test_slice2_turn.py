@@ -162,6 +162,28 @@ class TestWhatTheModelIsTold(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.recent(),
                          [{"said": "what is eth at", "interrupted": True}])
 
+    async def test_a_spoken_answer_answers_rather_than_interrupts(self):
+        """A confirm could not be answered by voice at all.
+
+        "Pin bitcoin price on screen" — "Keep it on the screen from now on?"
+        — "yes, please": the yes started a fresh turn, interrupted the one
+        waiting for it, and went to the model, which was asked out of nowhere
+        to react to somebody agreeing to nothing. The typed loop had always
+        checked for a pending question; the microphone path never did.
+        """
+        answered = []
+        class Waiting:
+            question = "Keep it on the screen from now on?"
+            state = State.CONFIRMING
+            def needs_answer(self):
+                return True
+            def answer(self, v):
+                answered.append(v)
+        self.s.current = Waiting()
+        await self.s.heard("yes, please")
+        self.assertEqual(answered, ["yes, please"],
+                         "the answer started a new turn instead")
+
     async def test_it_keeps_only_the_last_few(self):
         for i in range(HISTORY + 4):
             self.s.remember(said=str(i))
