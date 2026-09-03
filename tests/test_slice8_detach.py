@@ -104,5 +104,59 @@ class TestWhereTheAnswerGoes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.p.take(), [])
 
 
+class TestTheQueue(unittest.TestCase):
+    """docs/jobs.md §5. The caps have been in LIMITS since jobs.py was
+    written and were unreachable until escalations detached: only one could
+    exist at a time, because the turn waited for it."""
+
+    def setUp(self):
+        self.p = detach.Pending()
+
+    def _running(self, n):
+        for i in range(n):
+            self.p.add(detach.Detached("j%d" % i, "job %d" % i, None, None))
+
+    def test_room_is_about_what_is_already_detached(self):
+        self._running(1)
+        self.assertTrue(self.p.has_room(2))
+        self._running(2)          # j0 again plus j1 -> two distinct
+        self.assertFalse(self.p.has_room(2))
+
+    def test_a_request_over_the_cap_is_accepted_not_refused(self):
+        """Never 'I can't'. The request is taken and the person is told what
+        it is behind — a spinner and a silent twenty minute delay are the two
+        things §5 rules out."""
+        self._running(2)
+        self.p.enqueue(None, "summarise the repository")
+        self.assertEqual(len(self.p.queued), 1)
+
+    def test_it_can_say_what_you_are_waiting_for(self):
+        self._running(2)
+        waiting = self.p.waiting_on()
+        self.assertEqual(sorted(waiting), ["job 0", "job 1"])
+
+    def test_the_queue_is_first_in_first_out(self):
+        self.p.enqueue(None, "first")
+        self.p.enqueue(None, "second")
+        self.assertEqual(self.p.next_queued().text, "first")
+        self.assertEqual(self.p.next_queued().text, "second")
+        self.assertIsNone(self.p.next_queued())
+
+    def test_finishing_one_makes_room(self):
+        """The only moment a slot appears."""
+        self._running(2)
+        self.assertFalse(self.p.has_room(2))
+        self.p.done("j0", {"say": "done"})
+        self.assertTrue(self.p.has_room(2))
+
+    def test_a_queued_request_keeps_no_turn(self):
+        """It holds the text and the session, never the turn. The turn that
+        asked is over, and keeping it would keep alive the one thing that must
+        not be reused: its ability to ask the user something."""
+        q = self.p.enqueue("a-session", "a question")
+        self.assertFalse(hasattr(q, "turn"))
+        self.assertEqual(q.text, "a question")
+
+
 if __name__ == "__main__":
     unittest.main()

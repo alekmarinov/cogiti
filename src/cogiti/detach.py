@@ -48,6 +48,23 @@ class Detached:
         self.session = session
 
 
+class Queued:
+    """A request that was accepted and has not started.
+
+    It holds the session and the text rather than a turn: the turn that asked
+    is over by the time this runs, and keeping it alive would mean keeping
+    alive the one thing that must not be reused — its ability to ask the user
+    a question. A queued escalation that stops to ask has nobody to ask.
+    """
+
+    __slots__ = ("session", "text", "title")
+
+    def __init__(self, session, text):
+        self.session = session
+        self.text = text
+        self.title = text[:60]
+
+
 class Pending:
     """Answers that arrived with nobody listening.
 
@@ -61,6 +78,7 @@ class Pending:
     def __init__(self):
         self.running = {}            # job_id -> Detached
         self.finished = []           # (Detached, result), oldest first
+        self.queued = []             # Queued, oldest first
 
     def add(self, d):
         self.running[d.job_id] = d
@@ -84,6 +102,32 @@ class Pending:
 
     def __len__(self):
         return len(self.running)
+
+    # ------------------------------------------------------------ queue --
+
+    def has_room(self, limit):
+        """Whether another escalation may start now.
+
+        Counts what is already detached. An escalation running inside a turn
+        is not counted: the person is standing there waiting for it, and
+        refusing the thing they are present for in order to protect a budget
+        would be the wrong way round.
+        """
+        return len(self.running) < limit
+
+    def enqueue(self, session, text):
+        q = Queued(session, text)
+        self.queued.append(q)
+        return q
+
+    def next_queued(self):
+        return self.queued.pop(0) if self.queued else None
+
+    def waiting_on(self):
+        """What the person is waiting for, in their words, so the device can
+        say it. `docs/jobs.md` §5: "I'll start that when the repository
+        summary finishes" is an answer; a spinner is not."""
+        return [d.title for d in self.running.values()]
 
 
 async def with_deadline(coro, seconds=DETACH_AFTER_S):

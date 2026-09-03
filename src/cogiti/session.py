@@ -14,6 +14,7 @@ import asyncio
 import sys
 
 from . import detach
+from . import jobs
 from . import escalate
 from .turn import State, Turn
 
@@ -119,6 +120,18 @@ class Session:
 
         if result is None:
             turn.to(State.THINKING)
+            limit = jobs.LIMITS["concurrent_agent_jobs"]
+            if not self.cogiti.pending.has_room(limit):
+                # Accepted, not started, and said out loud. docs/jobs.md §5 is
+                # emphatic: "I'll start that when the other one finishes" is an
+                # answer; starting it silently in twenty minutes is not.
+                #
+                # Until escalations detached, this could not happen — only one
+                # could exist at a time because the turn waited for it. The cap
+                # has been in LIMITS since the module was written and was
+                # unreachable until last night.
+                return await self._queue(turn)
+
             result, running = await detach.with_deadline(
                 escalate.run(self.cogiti, self, turn))
             if running is not None:
@@ -169,6 +182,41 @@ class Session:
             self.cogiti.trace.interrupted(self, old)
             self.current = None
 
+    async def _queue(self, turn):
+        """Take the request, name what it is behind, and end the turn."""
+        self.cogiti.pending.enqueue(self, turn.text)
+        waiting = self.cogiti.pending.waiting_on()
+        first = waiting[0] if waiting else "what I'm doing"
+        result = {"type": "result", "linger": 0,
+                  "say": "I'll get to that when I've finished %s." % first}
+        turn.result = result
+        turn.to(State.SPEAKING)
+        said = await self.cogiti.output.say(result)
+        self.history.append((turn.text, said))
+        del self.history[:-HISTORY]
+        turn.to(State.IDLE)
+        return None
+
+    async def start_queued(self):
+        """Start the next accepted request, if there is room for it now.
+
+        Called when a detached job ends — done, failed or cancelled — because
+        that is the only moment a slot appears.
+        """
+        limit = jobs.LIMITS["concurrent_agent_jobs"]
+        while self.cogiti.pending.has_room(limit):
+            q = self.cogiti.pending.next_queued()
+            if q is None:
+                return
+            turn = Turn(q.session, q.text)
+            # No user to ask: the turn that asked is over. A queued escalation
+            # that stops for a question would be waiting on nobody, so it is
+            # told there is nobody rather than left hanging.
+            turn.ask = lambda _q: None
+            task = asyncio.ensure_future(
+                escalate.run(self.cogiti, q.session, turn))
+            self._track(turn, task, q.title)
+
     def _detach(self, turn, task):
         """Stop waiting for an escalation, and arrange for its answer.
 
@@ -176,25 +224,30 @@ class Session:
         spawns anything — so this creates nothing. It records who is waiting,
         and hands the turn a sentence to say meanwhile.
         """
+        self._track(turn, task, turn.text[:60])
+        return {"type": "result", "say": detach.STILL_WORKING, "linger": 0}
+
+    def _track(self, turn, task, title):
+        """Register a running job and arrange for whatever it produces."""
         run = getattr(turn, "agent_run", None)
         job_id = getattr(run, "job_id", None) or task.get_name()
-        d = detach.Detached(job_id, turn.text[:60], task, self)
+        d = detach.Detached(job_id, title, task, self)
         self.cogiti.pending.add(d)
 
         def arrived(t):
             if t.cancelled():
                 self.cogiti.pending.drop(d.job_id)
-                return
-            e = t.exception()
-            if e is not None:
+            elif t.exception() is not None:
                 self.cogiti.pending.done(d.job_id, {
                     "type": "failed", "kind": "job",
-                    "message": "that job failed: %s" % e})
-                return
-            self.cogiti.pending.done(d.job_id, t.result())
+                    "message": "that job failed: %s" % t.exception()})
+            else:
+                self.cogiti.pending.done(d.job_id, t.result())
+            # A slot just opened. This is the only moment one does.
+            asyncio.ensure_future(self.start_queued())
 
         task.add_done_callback(arrived)
-        return {"type": "result", "say": detach.STILL_WORKING, "linger": 0}
+        return d
 
     async def _deliver_pending(self):
         """Say what finished while the user was busy.
