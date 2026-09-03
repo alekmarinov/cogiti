@@ -20,6 +20,7 @@ PINNED = "pinned"
 
 ANSWER = "brain/answer"
 THOUGHTS = "brain/thoughts"
+HEARD = "brain/heard"
 
 
 class Presenter:
@@ -66,6 +67,35 @@ class Presenter:
                     attention="never", fallback="thinking")
         self._showing.add(THOUGHTS)
 
+    def heard(self, text):
+        """Show what was understood, while it is still being said.
+
+        The cheapest reassurance there is. A device that answers three seconds
+        after you stop talking has, until then, given you no evidence it heard
+        anything at all — and when it eventually answers the wrong question,
+        the first you learn of the mishearing is the answer.
+
+        **One object, updated, not a stream.** A transcript grows rather than
+        accumulating: "what", "what time", "what time is it" is one sentence
+        arriving, and appending it would show three. Last write wins, which is
+        what the port promises for an id that already exists.
+
+        `attention: never`, for the reason the thought stream has it: the face
+        should be looking at the person who is talking, not reading their
+        words off its own screen.
+        """
+        if not text:
+            return
+        self.a.send(op="create", id=HEARD, kind="text", text=text,
+                    style="caption", region=STAGE, lifetime=TURN,
+                    attention="never", fallback=text[:120])
+        self._showing.add(HEARD)
+
+    def clear_heard(self):
+        if HEARD in self._showing:
+            self.a.send(op="destroy", id=HEARD)
+            self._showing.discard(HEARD)
+
     def result(self, result):
         """The answer, as an object the adapter may later update or be asked
         about. `show` is what the agent chose to put on a screen; `say` is what
@@ -90,6 +120,7 @@ class Presenter:
         if result is None:
             return None
         self.clear_thoughts()
+        self.clear_heard()
         self._clear_previous(self._id_for(result))
 
         if result.get("type") == "failed":

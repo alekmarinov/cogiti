@@ -183,6 +183,8 @@ class TestNothingWasSaid(unittest.IsolatedAsyncioTestCase):
         from cogiti.session import Session
 
         class Brain:
+            output = None            # no face in this test; heard() is optional
+
             def __init__(self):
                 self.asked = []
 

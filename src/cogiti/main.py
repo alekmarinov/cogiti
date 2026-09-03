@@ -140,6 +140,10 @@ class FaceOutput:
             print("(could not %s the microphone: %s)"
                   % ("mute" if on else "unmute", e), file=sys.stderr, flush=True)
 
+    def heard(self, text):
+        """What the person is saying, on screen as they say it."""
+        self.p.heard(text)
+
     async def _marks_for(self, text):
         """Marks from whichever half of the speech port is configured.
 

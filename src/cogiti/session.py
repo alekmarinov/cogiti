@@ -312,11 +312,22 @@ class Session:
         """
         if not stable or not text:
             return None
+        # Show it while it is still arriving. Only stable partials: an
+        # unstable one rewrites as the window slides, and a caption that
+        # rewrites itself reads as the device changing its mind rather than as
+        # it listening.
+        show = getattr(self.cogiti.output, "heard", None)
+        if show:
+            show(text)
         return self.cogiti.resolve(text)
 
     async def heard(self, text):
         """A final transcript. This is an utterance like any other — unless
         there is nothing in it.
+
+        The final is shown too, not only the partials: a short utterance can
+        produce no stable partial at all, and the caption would then never
+        appear for exactly the sentences that are quickest to mishear.
 
         A recogniser returns an empty final for a sound that was loud enough
         to end the silence and had no words in it: a door, a chair, a cough.
@@ -330,6 +341,9 @@ class Session:
         """
         if not (text or "").strip():
             return None
+        show = getattr(self.cogiti.output, "heard", None)
+        if show:
+            show(text)
         return await self.utterance(text)
 
     # ------------------------------------------------------------ acting --
