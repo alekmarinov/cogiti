@@ -595,3 +595,57 @@ class TestLocalSources(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(updates), authoring.REQUIRED_UPDATES)
         shown = updates[0].get("text", "")
         self.assertRegex(shown, r"^\d{2}:\d{2}$", shown)
+
+
+class TestDeviceReadings(unittest.IsolatedAsyncioTestCase):
+    """Pinning something that is not on the web: the clock, and facts about
+    the machine. A service does not read the machine — it asks."""
+
+    def render(self, source, fmt="{value}"):
+        from cogiti import service_template as t, manifest as _m
+        spec = t.validate({"name": "m", "title": "the thing", "source": source,
+                           "format": fmt, "interval_s": 30})
+        code, man = t.render(spec)
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "main.py"), "w").write(code)
+        open(os.path.join(d, "service.toml"), "w").write(man)
+        return code, _m.load(os.path.join(d, "service.toml"))
+
+    def test_every_reading_renders_and_passes_the_checks(self):
+        from cogiti import service_template as t, static_checks
+        for source in sorted(set(t.CLOCK) | set(t.DEVICE)):
+            code, m = self.render(source)
+            self.assertEqual(static_checks.check(code, m), set(), source)
+            self.assertEqual(m.allow, [], source)
+
+    def test_a_metric_asks_cogiti_and_a_clock_does_not(self):
+        """The clock stays local because it needs nothing privileged, and a
+        clock that stops when cogiti restarts is worse than one that does
+        not."""
+        code, _ = self.render("memory")
+        self.assertIn("svc.read", code)
+        code, _ = self.render("time")
+        self.assertNotIn("svc.read", code)
+        self.assertIn("time.strftime", code)
+
+    def test_no_local_service_can_reach_anything(self):
+        for source in ("time", "memory", "disk", "ip"):
+            _code, m = self.render(source)
+            self.assertEqual(m.allow, [],
+                             "the broker permits a service exactly what its "
+                             "manifest declares, and this declares nothing")
+
+    def test_the_readings_are_short_enough_for_a_corner(self):
+        """services.md §1 gives a service the periphery. A panel that needs a
+        sentence is a panel in the wrong place."""
+        from cogiti import providers, readings
+        providers.load_all()
+        for name in readings.names():
+            text = readings.read(name)
+            if text is not None:
+                self.assertLess(len(text), 32, "%s: %r" % (name, text))
+
+    def test_an_unknown_reading_is_refused_by_name(self):
+        from cogiti import providers, readings
+        providers.load_all()
+        self.assertIsNone(readings.read("the barometer"))

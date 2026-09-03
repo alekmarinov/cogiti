@@ -56,11 +56,13 @@ PROPOSE_TOOL = {
                                      "'the ETH price'"},
             "source": {"type": "string",
                        "description":
-                           "either an https url returning JSON, or one of the "
-                           "device's own readings: time, date, day, datetime. "
-                           "A device reading needs no network and works "
-                           "offline; use one when the thing asked for is the "
-                           "clock or the date."},
+                           "either an https url returning JSON, or one of "
+                           "the device's own readings: time, date, day, "
+                           "datetime, uptime, disk, memory, load, ip, "
+                           "hostname. A device reading needs no network, no "
+                           "key and works offline; use one whenever the thing "
+                           "asked for is about this machine or the clock, "
+                           "rather than going looking for an api."},
             "path": {"type": "array", "items": {"type": "string"},
                      "description": "only for a url: where the value is in "
                                     "that document, as keys, e.g. "

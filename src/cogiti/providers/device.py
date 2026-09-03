@@ -90,6 +90,54 @@ def disk(path="/", **_args):
     }, ttl_s=300, source=path)
 
 
+@provider("device.memory")
+def memory(**_args):
+    """How much of the memory is in use.
+
+    From MemAvailable rather than MemFree, which is the number people mean:
+    MemFree counts the cache as used and reports a healthy Linux box as nearly
+    full, every time, for ever.
+    """
+    fields = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                fields[key] = int(rest.split()[0])       # kB
+    except (OSError, ValueError, IndexError):
+        return Result.failed("unavailable")
+    total = fields.get("MemTotal", 0)
+    avail = fields.get("MemAvailable", fields.get("MemFree", 0))
+    if not total:
+        return Result.failed("unavailable")
+    used = total - avail
+    return Result(values={
+        "percent_used": int(100 * used / total),
+        "used_mb": used // 1024,
+        "total_mb": total // 1024,
+        "used_spoken": "%d percent" % int(100 * used / total),
+    }, ttl_s=10)
+
+
+@provider("device.load")
+def load(**_args):
+    """The one minute load average.
+
+    Not a percentage and deliberately not dressed up as one: load is a queue
+    length, and a device with four cores at a load of 4 is busy rather than
+    broken.
+    """
+    try:
+        with open("/proc/loadavg") as f:
+            one, five, fifteen = f.read().split()[:3]
+    except (OSError, ValueError):
+        return Result.failed("unavailable")
+    return Result(values={
+        "load1": float(one), "load5": float(five), "load15": float(fifteen),
+        "load_spoken": "%.2f" % float(one),
+    }, ttl_s=10)
+
+
 @provider("device.hearing")
 def hearing(**_args):
     """Whether it can hear you.

@@ -218,6 +218,32 @@ class Service:
             raise RuntimeError(msg.get("error", "the fetch was refused"))
         return json.loads(msg.get("body") or "null")
 
+    async def read(self, name):
+        """A fact about the device, from cogiti.
+
+        A service does not read the machine — it asks. The alternative was
+        letting a service call `os` and `shutil` itself, which would mean
+        allowing, in the static checks, exactly the calls that make those
+        checks pointless. This way a service can be given a new reading
+        without gaining a new capability.
+        """
+        if not self.broker:
+            raise RuntimeError("no broker: a service reads the device by "
+                               "asking cogiti, and cogiti is not there")
+        reader, writer = await asyncio.open_unix_connection(self.broker)
+        try:
+            writer.write((json.dumps(
+                {"v": V, "service": self.name, "op": "read", "name": name}
+            ) + "\n").encode())
+            await writer.drain()
+            line = await reader.readline()
+        finally:
+            writer.close()
+        msg = json.loads(line or b"{}")
+        if not msg.get("ok"):
+            raise RuntimeError(msg.get("error", "the reading was refused"))
+        return msg.get("text", "")
+
     # -------------------------------------------------------- the loop --
 
     def run(self):

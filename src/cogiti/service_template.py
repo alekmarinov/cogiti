@@ -35,12 +35,44 @@ PATH_RE = re.compile(r"^[A-Za-z0-9_.\- ]{1,64}$")
 #: device that can only pin things it downloaded is a device that shows an
 #: empty screen when the network is out. Nothing here needs a network, a key,
 #: or a permission.
-LOCAL = {
+#: Readings from the clock, computed in the service itself. They stay local
+#: rather than going through cogiti because they need nothing privileged and
+#: because a clock that stops when cogiti restarts is worse than one that
+#: does not.
+CLOCK = {
     "time": "%H:%M",
     "date": "%A %-d %B",
     "day": "%A",
     "datetime": "%a %-d %b %H:%M",
 }
+
+#: Readings about the machine, which the service asks cogiti for. See
+#: `readings.py`, which is the whitelist and the renderer both. Named here
+#: only so a manifest can be validated without importing that module.
+DEVICE = ("uptime", "disk", "memory", "load", "ip", "hostname")
+
+DEVICE_TEMPLATE = '''"""%(title)s.
+
+Written by InteliBoy from a template. It asks cogiti for one reading about
+the device and reaches no network at all.
+"""
+
+from cogiti.service import Service, every
+
+svc = Service()
+
+READING = %(reading)r
+FORMAT = %(format)r
+
+
+@every(%(interval)d)
+async def tick():
+    svc.show(kind="text", style="headline",
+             text=FORMAT.format(value=await svc.read(READING)))
+
+
+svc.run()
+'''
 
 LOCAL_TEMPLATE = '''"""%(title)s.
 
@@ -130,10 +162,11 @@ def validate(spec):
                       % ", ".join(sorted(LOCAL)))
     source = source.strip()
     out["local"] = None if source.startswith("https://") else source
-    if out["local"] is not None and out["local"] not in LOCAL:
+    if out["local"] is not None and out["local"] not in CLOCK \
+            and out["local"] not in DEVICE:
         raise BadSpec("%r is not something the device can read. Use an https "
                       "url, or one of: %s"
-                      % (source, ", ".join(sorted(LOCAL))))
+                      % (source, ", ".join(sorted(set(CLOCK) | set(DEVICE)))))
     out["url"] = source if out["local"] is None else ""
 
     for key in ("name", "title", "format"):
@@ -194,10 +227,17 @@ def render(spec):
     """The two files, as text. `spec` must have been through `validate`."""
     from urllib.parse import urlparse
     host = ""
-    if spec["local"] is not None:
+    if spec["local"] in DEVICE:
+        code = DEVICE_TEMPLATE % {
+            "title": spec["title"],
+            "reading": spec["local"],
+            "format": spec["format"],
+            "interval": spec["interval_s"],
+        }
+    elif spec["local"] is not None:
         code = LOCAL_TEMPLATE % {
             "title": spec["title"],
-            "strftime": LOCAL[spec["local"]],
+            "strftime": CLOCK[spec["local"]],
             "format": spec["format"],
             "interval": spec["interval_s"],
         }

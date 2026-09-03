@@ -31,6 +31,7 @@ import socket
 import urllib.error
 import urllib.request
 
+from . import readings
 from . import trust
 
 V = 1
@@ -99,6 +100,20 @@ class Broker:
                 # something to draw.
                 self.values[name] = str(req.get("text", ""))[:200]
                 return await self._say(writer, ok=True)
+
+            if req.get("op") == "read":
+                # A fact about the device. No allow-list applies: the reading
+                # is chosen from a whitelist here rather than described by the
+                # service, so there is nothing for a manifest to declare and
+                # nothing a service could ask for that this does not already
+                # permit everyone.
+                text = readings.read(req.get("name", ""))
+                if text is None:
+                    return await self._say(writer, ok=False,
+                                           error="no reading called %r; there "
+                                                 "is %s" % (req.get("name"),
+                                                            ", ".join(readings.names())))
+                return await self._say(writer, ok=True, text=text)
 
             if req.get("op") != "fetch":
                 return await self._say(writer, ok=False,
