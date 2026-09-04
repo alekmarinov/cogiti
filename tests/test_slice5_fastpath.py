@@ -429,6 +429,19 @@ class TestAWeakMatchMidConversation(Base):
         await s.utterance("show me the results")
         self.assertEqual(c.escalated, [], "it escalated a standalone command")
 
+    async def test_waiting_for_an_answer_counts_as_talking(self):
+        """The window starts when a turn ends, and a detached escalation ends
+        five seconds in while its answer takes another minute. So it expired
+        on somebody standing there waiting — which is the most conversational
+        state there is."""
+        import time as _t
+        c, s = self.session({"show me the results": self.weak()},
+                            {"list_services": command("list_services")})
+        s._last_turn_ns = _t.monotonic_ns() - int(120e9)      # long ago
+        c.pending.add(detach.Detached("j1", "the usb sticks", None, s))
+        await s.utterance("show me the results")
+        self.assertEqual(c.escalated, ["show me the results"])
+
     async def test_a_confident_match_is_untouched(self):
         """Only the unsure band moves. `handle` still acts, immediately,
         which is the whole reason the fast path exists."""

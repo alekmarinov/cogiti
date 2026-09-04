@@ -705,6 +705,14 @@ class Session:
         opinion.
         """
         import time as _time
+        # **Owing somebody an answer counts.** The clock below starts when a
+        # turn *ends*, and a detached escalation ends five seconds in while
+        # the answer takes another minute — so the window expired on somebody
+        # who was standing there waiting, which is the most conversational
+        # state there is. Seen in a replay: a follow-up seventy seconds after
+        # the holding line and before the answer, treated as a fresh command.
+        if getattr(getattr(self.cogiti, "pending", None), "running", None):
+            return True
         if not self._last_turn_ns:
             return False
         gap = (_time.monotonic_ns() - self._last_turn_ns) / 1e9
