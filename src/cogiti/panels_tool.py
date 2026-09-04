@@ -33,14 +33,20 @@ def tool():
             "comparison, anything with a photograph or a set of figures. "
             "Say the short version out loud and let the screen carry the "
             "detail; do not read the specifications aloud one by one. "
-"For a picture, prefer `image_page`: give the https address of a page "
-            "about the thing — a review, a product listing, an encyclopedia "
-            "entry — and the device reads that page's own photograph off it. "
-            "You cannot see images in a fetched page, because fetching gives "
-            "you text, so naming the page is how you get one without "
-            "guessing at a URL. Use `image_url` only when you have the "
-            "address of the image itself. A panel still appears if its "
-            "picture cannot be fetched, so never invent either one.",
+"**For a picture, call `find_pictures` on a page first and pass what "
+            "it gives you as `image_url`.** That is the route that works: it "
+            "lists what is actually on the page with the page's own words "
+            "for each, and you choose. Judge by the description and by the "
+            "file name, which usually names the thing even when the "
+            "description is empty.\n\n"
+            "`image_page` is the fallback for when you have not looked: the "
+            "device takes that page's own header picture, which on an "
+            "article about many things is the banner rather than the one you "
+            "meant. Having called `find_pictures` and then passed a page "
+            "anyway is the mistake to avoid — it throws away the twenty-four "
+            "photographs you were just handed.\n\n"
+            "A panel still appears if its picture cannot be fetched, so "
+            "never invent a URL of either kind.",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,

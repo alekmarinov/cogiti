@@ -160,6 +160,21 @@ class TestChoosingAPicture(unittest.TestCase):
         self.assertTrue(cs[0]["alt"], "an undescribed picture was offered first")
 
 
+class TestWhatTheToolTellsTheModel(unittest.TestCase):
+    def test_it_points_at_find_pictures_first(self):
+        """Measured failure: asked for a present for a nine-year-old, it
+        called find_pictures, was handed twenty-four photographs, and then
+        passed `image_page` for every panel — because the description still
+        said to prefer that, written before find_pictures existed. All three
+        panels came back with no picture."""
+        from cogiti import panels_tool
+        d = panels_tool.tool()["description"]
+        self.assertIn("call `find_pictures`", d)
+        self.assertLess(d.index("find_pictures"), d.index("image_page"),
+                        "the fallback is described before the route that works")
+        self.assertIn("fallback", d)
+
+
 class TestPanels(unittest.TestCase):
     def setUp(self):
         self.a = FakeAdapter()
