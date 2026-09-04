@@ -390,7 +390,13 @@ class Session:
         # was flushed five seconds before it did.
         if d is not None:
             self.cogiti.trace.detached(self, turn, d.job_id)
-        return {"type": "result", "say": detach.STILL_WORKING, "linger": 0}
+        # `pending`, so the screen knows this is not the end of anything. The
+        # face clears its thought stream when an answer lands, which is right
+        # for an answer and exactly wrong for this one: the work carries on
+        # for another minute, and the moment somebody most needs to see it is
+        # the moment they have just been told to wait.
+        return {"type": "result", "say": detach.STILL_WORKING, "linger": 0,
+                "pending": True}
 
     def _track(self, turn, task, title):
         """Register a running job and arrange for whatever it produces."""

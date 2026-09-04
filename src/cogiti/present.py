@@ -170,7 +170,18 @@ class Presenter:
         """
         if result is None:
             return None
-        self.clear_thoughts()
+        if result.get("pending"):
+            # A `pending` result is the "I'm still working on that" line, and
+            # the work goes on behind it. Clearing the reasoning there is the
+            # one place it must not be cleared: twenty thoughts were being
+            # drawn and wiped five seconds in, so a minute of searching
+            # showed a blank screen and a head.
+            #
+            # Marked as belonging to this turn so the sweep below spares it
+            # too — the same mechanism the panels use, for the same reason.
+            self._this_turn.add(THOUGHTS)
+        else:
+            self.clear_thoughts()
         self.clear_heard()
         self._clear_previous(self._id_for(result))
 

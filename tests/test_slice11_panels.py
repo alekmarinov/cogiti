@@ -120,5 +120,35 @@ class TestPanels(unittest.TestCase):
                         "a panel outlived the conversation")
 
 
+class TestThinkingOutLoud(unittest.TestCase):
+    """The reasoning stays up while the work goes on behind it."""
+
+    def setUp(self):
+        self.a = FakeAdapter()
+        self.p = present.Presenter(self.a)
+
+    def ids_destroyed(self):
+        return [o["id"] for o in self.a.ops if o.get("op") == "destroy"]
+
+    def test_the_holding_line_does_not_wipe_the_reasoning(self):
+        """Twenty thoughts were drawn and cleared five seconds in, so a
+        minute of searching showed a blank screen and a head. The moment
+        somebody most needs to see the work is the moment they have just been
+        told to wait."""
+        self.p.thought("looking it up")
+        self.a.ops.clear()
+        self.p.result({"type": "result", "say": "I'm still working on that.",
+                       "pending": True})
+        self.assertNotIn(present.THOUGHTS, self.ids_destroyed())
+
+    def test_the_real_answer_does_wipe_it(self):
+        self.p.thought("looking it up")
+        self.p.result({"type": "result", "say": "still working",
+                       "pending": True})
+        self.a.ops.clear()
+        self.p.result({"type": "result", "say": "here it is"})
+        self.assertIn(present.THOUGHTS, self.ids_destroyed())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
