@@ -247,6 +247,36 @@ class FaceOutput:
         self.p.stop()
 
 
+def _claim_state_dir(state_dir):
+    """One cogiti per state directory. Returns the fd holding the claim.
+
+    A lock rather than a pidfile: a pidfile outlives the process that wrote
+    it, so it has to be validated, and validating it means guessing whether
+    pid 6967 is the cogiti that wrote it or something the kernel handed the
+    number to since. The kernel drops a flock when the process goes, however
+    it goes, which is the property actually wanted here.
+    """
+    import fcntl
+    path = os.path.join(os.path.expanduser(state_dir), "cogiti.lock")
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            other = os.read(fd, 32).decode("utf-8", "replace").strip()
+        except OSError:
+            other = "?"
+        os.close(fd)
+        raise _config.ConfigError(
+            "another cogiti (pid %s) is using %s. Two of them share one "
+            "broker socket and one database, and the second silently cuts "
+            "the first one's services off — stop that one, or point this "
+            "one at a different state_dir." % (other or "?", state_dir))
+    os.ftruncate(fd, 0)
+    os.write(fd, ("%d\n" % os.getpid()).encode())
+    return fd
+
+
 class Cogiti:
     def __init__(self, cfg):
         self.config = cfg
@@ -752,6 +782,19 @@ class Cogiti:
         return caps
 
     async def start(self):
+        # Before anything is opened or bound. Two cogiti on one state
+        # directory do not fail, which is the problem: the second unlinks the
+        # broker socket and binds its own, and every service the first one
+        # started is cut off from it for good. They keep ticking, once every
+        # interval, into a path that now belongs to somebody else —
+        #
+        #   memory-usage: tick failed: [Errno 111] Connection refused
+        #
+        # — with nothing anywhere saying why, because the first cogiti is
+        # still listening happily on a socket the path no longer names. They
+        # also share cogiti.db and jobs.db, which is worse and quieter.
+        self._lock = _claim_state_dir(self.config["state_dir"])
+
         # Orphan recovery before anything else runs, so the table never claims
         # a process that is not there.
         orphaned = jobs.recover(self.db)
@@ -989,17 +1032,33 @@ def main(argv=None):
         print("  --print-config   every setting, and who decided it")
         return 0
 
-    cfg = _config.load(rest, conf_path=known.conf)
+    try:
+        cfg = _config.load(rest, conf_path=known.conf)
+    except _config.ConfigError as e:
+        print("cogiti: %s" % e, file=sys.stderr)
+        return 2
     if known.print_config:
         cfg.print_config()
         return 0
 
-    c = Cogiti(cfg)
+    # A ConfigError is a sentence written for a person — every one of them
+    # names the setting and says what to do about it. Reaching the terminal as
+    # a traceback buried that sentence under eleven lines of asyncio frames,
+    # which is how "another cogiti is already running" read as a crash.
+    try:
+        c = Cogiti(cfg)
+    except _config.ConfigError as e:
+        print("cogiti: %s" % e, file=sys.stderr)
+        return 2
     loop = asyncio.new_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, loop.stop)
     try:
-        loop.run_until_complete(c.start())
+        try:
+            loop.run_until_complete(c.start())
+        except _config.ConfigError as e:
+            print("cogiti: %s" % e, file=sys.stderr)
+            return 2
         if cfg["speech_in_adapter"]:
             loop.run_until_complete(c.listen(cfg["speech_in_adapter"].split()))
 
