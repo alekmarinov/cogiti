@@ -279,6 +279,124 @@ class TestPresentationTemplates(unittest.TestCase):
         self.assertEqual(op["text"], "{nope}")
 
 
+class TestBeingAddressed(Base):
+    """Said to the device, or merely near it.
+
+    In one evening it took "personal cost in 8 terabytes effectively", "will
+    this is the kuni materiality?" and "you don't win it now" as things said
+    to it, and answered the last with an eleven-second call to a language
+    model. Every one of them was said to somebody else in the room.
+    """
+
+    def listening(self, decisions, commands=None, attention_s="60"):
+        c, s = self.session(decisions, commands or {})
+        c.resolver = object()
+        c.config = {"attention_s": attention_s}
+        return c, s
+
+    async def test_it_ignores_what_was_not_said_to_it(self):
+        c, s = self.listening({"you don't win it now": None})
+        await s.utterance("you don't win it now")
+        self.assertEqual(c.escalated, [], "it answered somebody else")
+        self.assertEqual(c.output.said, [])
+
+    async def test_a_greeting_opens_the_window(self):
+        """Saying hello to something is addressing it, and the reply is both
+        the answer and the acknowledgement — so `greeting` is not a
+        compromise here, it is the natural way in."""
+        c, s = self.listening(
+            {"hello": FakeDecision("greeting"),
+             "what time is it": FakeDecision("get_time")},
+            {"greeting": command("greeting", speak="Hello."),
+             "get_time": command("get_time", speak="It is late.")})
+        self.assertFalse(s.attending())
+        await s.utterance("hello")
+        self.assertTrue(s.attending(), "a greeting did not open it")
+        await s.utterance("what time is it")
+        self.assertIn("get_time", [i for i, _ in c.ran])
+
+    async def test_an_exact_command_needs_no_greeting(self):
+        """Nobody says "what time is it" to another person and expects
+        nothing to happen, and requiring a greeting before every cold
+        request makes the common case two sentences."""
+        c, s = self.listening(
+            {"what time is it": FakeDecision("get_time", tier="pattern")},
+            {"get_time": command("get_time", speak="It is late.")})
+        await s.utterance("what time is it")
+        self.assertIn("get_time", [i for i, _ in c.ran])
+        self.assertTrue(s.attending(), "answering it did not open the window")
+
+    async def test_a_near_miss_still_needs_addressing(self):
+        """The similar tier is where a room's conversation lands. Only an
+        exact phrase the device was taught gets through unaddressed."""
+        c, s = self.listening(
+            {"i want that clock gone": FakeDecision("remove_service",
+                                                    tier="similar")},
+            {"remove_service": command("remove_service", speak="Gone.")})
+        await s.utterance("i want that clock gone")
+        self.assertEqual(c.ran, [], "a near miss acted unaddressed")
+
+    async def test_a_confirm_never_gets_through_unaddressed(self):
+        """It would have the device asking a question of a room that was not
+        talking to it."""
+        c, s = self.listening(
+            {"power off": FakeDecision("power_off", tier="pattern",
+                                       verdict="confirm")},
+            {"power_off": command("power_off", speak="Bye.")})
+        await s.utterance("power off")
+        self.assertEqual(c.ran, [])
+
+    async def test_its_own_name_opens_it_too(self):
+        c, s = self.listening({"inteliboy": FakeDecision("wake")})
+        await s.utterance("inteliboy")
+        self.assertTrue(s.attending())
+
+    async def test_stop_closes_it(self):
+        """`stop` already meant stop talking. To a person it always also
+        meant stop listening, and now it does."""
+        c, s = self.listening({"inteliboy": FakeDecision("wake"),
+                               "stop": FakeDecision("stop")})
+        await s.utterance("inteliboy")
+        await s.utterance("stop")
+        self.assertFalse(s.attending(), "stop left it listening")
+
+    async def test_every_answered_turn_extends_it(self):
+        """Nobody says "hey computer" before each clause, and a device that
+        demands it is one people stop talking to."""
+        c, s = self.listening(
+            {"inteliboy": FakeDecision("wake"),
+             "what time is it": FakeDecision("get_time")},
+            {"get_time": command("get_time", speak="It is late.")})
+        await s.utterance("inteliboy")
+        s._attending_until -= 55                  # nearly expired
+        await s.utterance("what time is it")
+        self.assertTrue(s.attending(), "answering did not extend it")
+
+    async def test_zero_is_always_listening(self):
+        """cogiti's default: being addressed is a property of a room, and
+        cogiti is general. InteliBoy sets 60 in its own config."""
+        c, s = self.listening({"what time is it": FakeDecision("get_time")},
+                              {"get_time": command("get_time",
+                                                   speak="It is late.")},
+                              attention_s="0")
+        await s.utterance("what time is it")
+        self.assertIn("get_time", [i for i, _ in c.ran])
+
+    async def test_with_no_resolver_it_still_hears_everything(self):
+        """Nothing could recognise a greeting or the device's name, so
+        nothing could ever address it. ports.md allows a deployment with no
+        resolver — it escalates everything — and this must not quietly turn
+        that into a brick."""
+        c, s = self.session({"anything at all": None}, {})
+        c.config = {"attention_s": "60"}          # and no resolver
+        await s.utterance("anything at all")
+        self.assertEqual(c.escalated, ["anything at all"])
+
+    async def test_an_unreadable_setting_fails_towards_hearing_you(self):
+        c, s = self.listening({}, attention_s="not a number")
+        self.assertEqual(s.attention_s(), 0.0)
+
+
 class TestARoomIsNotARequest(Base):
     """A single word the resolver made nothing of is not worth a model call.
 

@@ -48,6 +48,22 @@ DEFAULTS = {
     # nothing, which is the right default.
     "egress_hosts":  "",
 
+    # How long the device stays addressed after being spoken to, in seconds.
+    # It hears a room, not a microphone held to one mouth, and in one evening
+    # it answered "you don't win it now" with an eleven-second call to a
+    # language model — a sentence said to somebody else entirely.
+    #
+    # **0 means always listening, and is the default**, because cogiti is
+    # general and being addressed is a property of a room. A deployment with a
+    # close-talk microphone or one person in a quiet office wants none of
+    # this; InteliBoy sits on a shelf in a room with other people in it and
+    # sets it in its own config.
+    #
+    # The escape hatch matters more than the feature: a wake word that
+    # mishears leaves a device that is simply deaf, with nothing on its face
+    # to say why, and that must be recoverable without building an image.
+    "attention_s":   "0",
+
     "trace_file":    "",          # empty: stderr
 
     # What the agent adapter is given, as `ENV_VAR=secret.name` pairs. Which

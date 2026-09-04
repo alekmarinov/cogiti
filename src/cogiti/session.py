@@ -69,6 +69,16 @@ def bare_answer(text):
 #: name it was told.
 HISTORY = 20
 
+#: Intents that mean "I am talking to you" rather than merely being said near
+#: the device. `greeting` is one of them and is not a compromise: saying hello
+#: to something is addressing it, and the device answering "Hello." is both
+#: the reply and the acknowledgement.
+ADDRESSING = ("wake", "greeting")
+
+#: And the one that means "we are done". `stop` already meant stop talking;
+#: to a person it always also meant stop listening, and now it does.
+RELEASING = ("stop",)
+
 
 class Session:
     def __init__(self, cogiti, speaker_id=UNKNOWN_SPEAKER, thread="main"):
@@ -77,6 +87,7 @@ class Session:
         self.history = []           # [{...}], most recent last
         self.current = None
         self._last_turn_ns = None
+        self._attending_until = 0.0
 
     def remember(self, **entry):
         """Record one exchange for the next escalation to read.
@@ -193,6 +204,14 @@ class Session:
         # special case here, it is simply no decision.
         decision = self.cogiti.resolve(turn.text)
         turn.decision = decision
+        if not self._addressed(decision):
+            # Said in the room, not to the device. Nothing is answered and
+            # nothing is spoken — a device that says "sorry, I didn't catch
+            # that" over two people talking is itself the interruption it is
+            # apologising for.
+            self.cogiti.trace.decided(self, turn, decision)
+            turn.to(State.IDLE)
+            return None
         self.cogiti.trace.decided(self, turn, decision)
         result = await self._act(turn, decision)
 
@@ -610,6 +629,89 @@ class Session:
         return None
 
     # ----------------------------------------------------------- context --
+
+    # ------------------------------------------------------ attention --
+
+    def attention_s(self):
+        """Zero — always listening — for anything that cannot say otherwise.
+
+        A missing or unreadable setting must not be able to make the device
+        deaf. Every way this can fail fails towards hearing you.
+        """
+        cfg = getattr(self.cogiti, "config", None)
+        if cfg is None:
+            return 0.0
+        try:
+            return float(cfg["attention_s"])
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+
+    def attending(self):
+        import time as _time
+        return _time.monotonic() < self._attending_until
+
+    def attend(self):
+        import time as _time
+        self._attending_until = _time.monotonic() + self.attention_s()
+
+    def release(self):
+        self._attending_until = 0.0
+
+    def _addressed(self, decision):
+        """Is this being said to the device, or merely near it?
+
+        A window rather than a wake word on every sentence: nobody says "hey
+        computer" before each clause, and a device that demands it is one
+        people stop talking to. Address it once and it stays with you; say
+        `stop`, or leave it alone for a minute, and it stops listening.
+
+        Off when `attention_s` is 0, which is the behaviour that existed
+        before this and is still right for a close-talk microphone. The escape
+        hatch matters more than the feature: a wake word that mishears leaves
+        a device that is simply deaf, and nothing on its face says why.
+        """
+        if self.attention_s() <= 0:
+            return True
+        if getattr(self.cogiti, "resolver", None) is None:
+            # Nothing can recognise a greeting or the device's name, so
+            # nothing could ever address it and it would be deaf for good.
+            # `ports.md` allows a deployment with no resolver — it escalates
+            # everything — and this must not quietly turn that into a brick.
+            return True
+        intent = getattr(decision, "intent_id", None)
+        if intent in RELEASING:
+            # Still handled — `stop` has work to do — and then the window
+            # closes behind it.
+            self.release()
+            return True
+        if intent in ADDRESSING:
+            self.attend()
+            return True
+        if self.attending():
+            # Every answered turn extends it. A conversation is not a series
+            # of separately addressed requests.
+            self.attend()
+            return True
+
+        # **Not addressed, but unmistakable.** A pattern-tier match is an
+        # exact phrase the device was taught, and nobody says "what time is
+        # it" to another person and expects nothing to happen. Requiring a
+        # greeting before every cold request is the bargain a smart speaker
+        # makes and it is a poor one: the common case becomes two sentences.
+        #
+        # This is also where the cost actually is. Ambient speech does not
+        # resolve — "you don't win it now" and "personal cost in 8 terabytes
+        # effectively" reach no intent at all — so gating escalation gates
+        # every model call, which is the thing that was being spent on other
+        # people's conversations.
+        #
+        # `handle` only. A `confirm` reached this way would have the device
+        # asking a question of a room that was not talking to it.
+        if (getattr(decision, "tier", None) == "pattern"
+                and getattr(decision, "verdict", None) == "handle"):
+            self.attend()
+            return True
+        return False
 
     def context(self):
         """What an escalation is told beyond the utterance itself.
