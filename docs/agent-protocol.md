@@ -78,11 +78,20 @@ merely about to be killed.
 ```json
 {"v":1,"type":"thought","text":"checking both sources"}
 {"v":1,"type":"progress","note":"2 of 3 fetched","pct":66}
+{"v":1,"type":"say","text":"Sunlight is a mix of colours."}
 {"v":1,"type":"tool","id":"t1","name":"http","args":{…}}
 {"v":1,"type":"question","id":"q1","ask":"which repository?","expects":"text"}
 ```
 
 `thought` and `progress` are informational and may be dropped under load.
+
+`say` is the answer being spoken while it is still being written, **a sentence
+at a time** — the speech port synthesises a phrase, and a word at a time is
+neither speakable nor interruptible. It goes to the speech port and nowhere
+else: nothing draws it, nothing retains it, and it never appears in `show`.
+See §7 for why that restriction is the whole of what makes it safe.
+
+An adapter need not send any. One that does not behaves exactly as before.
 `tool` and `question` are requests: the adapter continues working and waits for
 the matching `tool_result` or `answer`.
 
@@ -98,7 +107,9 @@ Two terminal events, after which the adapter exits:
 ```
 
 `say` is plain text for the speech port — **not prose from the model**, but the
-sentence the adapter constructed to be spoken. `show` is a presentation
+sentence the adapter constructed to be spoken. When `say` events were streamed
+it is the whole answer for the record, and cogiti does **not** speak it a
+second time. `show` is a presentation
 composition or absent. `did` is what actually happened, for the audit log; it is
 cogiti's record and not the model's account of itself, so cogiti fills what it
 knows and treats this as a claim to be checked against what it brokered.
@@ -149,10 +160,20 @@ cogiti → {"v":1,"type":"tool_result","id":"t1","ok":true,"value":{…}}
 
 ## 7. Deliberately absent
 
-- **Streaming a partial `result`.** A result is structured and arrives once.
-  `thought` and `progress` carry the sense of movement; a half-built result
-  would tempt the presentation layer into rendering something that is about to
-  change.
+- **Streaming a partial `result`.** Still absent, and the reasoning is why the
+  `say` event above is shaped as it is. A result is structured and arrives
+  once; a half-built one would tempt the presentation layer into rendering
+  something that is about to change.
+
+  The objection is to the *structured* half — `show` and `did` — which is
+  retained on a screen and must not flicker. Speech is not presentation: a
+  spoken sentence is gone the moment it leaves and cannot be about to change.
+  So `say` streams and `show` does not, and the rule that keeps them apart is
+  that `say` reaches the speech port and no other.
+
+  Measured, before it existed: eleven escalations, median sixty-eight seconds,
+  every one past five seconds arriving as two disjoint utterances — a stall
+  and then an answer prefixed with the question it was answering.
 - **Any notion of a conversation.** The adapter is given a prompt and returns an
   answer. Threading, history and identity are cogiti's, in `session.py`, and an
   adapter that kept its own would have a second one that disagreed.

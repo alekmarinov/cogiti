@@ -8,6 +8,8 @@ Tools and hosts are decided here, before the job starts, from what the user
 asked for — never widened later because something the agent read suggested it.
 """
 
+import asyncio
+
 from . import device_tool
 from . import panels_tool
 from . import secrets
@@ -102,6 +104,16 @@ async def run(cogiti, session, turn):
         # Routed here rather than inside the adapter because what is worth
         # showing is a presentation decision, and the adapter must not have
         # one.
+        if e.get("type") == "say":
+            # Straight to the speech port and nowhere else. `on_thought` goes
+            # to a screen; this must not, and the whole safety of streaming
+            # it rests on that separation — agent-protocol.md §7.
+            text = (e.get("text") or "").strip()
+            aloud = getattr(cogiti.output, "say_aloud", None)
+            if text and aloud:
+                turn.spoke = True
+                asyncio.ensure_future(aloud(text))
+            return
         if e.get("type") == "thought":
             hook = getattr(cogiti.output, "on_thought", None)
             if hook:

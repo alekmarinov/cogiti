@@ -35,6 +35,15 @@ DETACH_AFTER_S = 5.0
 #: silently deferred, and this is the audible form of that.
 STILL_WORKING = "I'm still working on that. I'll tell you when I have it."
 
+#: After the deadline, how long to keep looking for the answer to start.
+#: An answer that streams begins a second or two *past* five seconds — it
+#: thinks first and writes second — so checking once at the deadline caught
+#: none of them: the device said "I'm still working on that" and then
+#: immediately answered. Polled in slices rather than waited out, so a run
+#: that is genuinely stalled still gives up close to the deadline.
+GRACE_S = 3.0
+SLICE_S = 0.25
+
 
 class Detached:
     """A job whose turn has ended, and the answer it will one day produce."""
@@ -130,7 +139,7 @@ class Pending:
         return [d.title for d in self.running.values()]
 
 
-async def with_deadline(coro, seconds=DETACH_AFTER_S):
+async def with_deadline(coro, seconds=DETACH_AFTER_S, answering=None):
     """Run it, but stop waiting after `seconds`.
 
     Returns `(result, task)`. Exactly one is None: a result means it finished
@@ -141,15 +150,34 @@ async def with_deadline(coro, seconds=DETACH_AFTER_S):
     what it is waiting on when it times out, which is precisely the opposite of
     what is wanted here — the work must survive the wait ending. Shielding lets
     the wait expire while the task underneath runs on.
+
+    `answering` is asked at the deadline, and again each time it is reached:
+    **a turn that has begun speaking has not stalled.** Asking once before
+    the wait would be useless, because the first sentence of a streamed
+    answer arrives a second or two *after* the deadline — measured, it fired
+    at five seconds and the speaking began at six, so the device said "I'm
+    still working on that" and then immediately answered anyway.
     """
     task = asyncio.ensure_future(coro)
-    try:
-        return await asyncio.wait_for(asyncio.shield(task), seconds), None
-    except asyncio.TimeoutError:
-        return None, task
-    except asyncio.CancelledError:
-        # The turn was interrupted, not the work. Barge-in cancels a turn, and
-        # a turn that is cancelled while waiting on an escalation should take
-        # the escalation with it: nobody is waiting for that answer any more.
-        task.cancel()
-        raise
+    waited, wait = 0.0, seconds
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), wait), None
+        except asyncio.TimeoutError:
+            if answering is not None and answering():
+                # Speaking. What bounds this now is the agent's own budget,
+                # not the stall detector — nobody is being kept waiting by a
+                # device that is mid-sentence.
+                wait = seconds
+                continue
+            waited += wait
+            if answering is not None and waited < seconds + GRACE_S:
+                wait = SLICE_S
+                continue
+            return None, task
+        except asyncio.CancelledError:
+            # The turn was interrupted, not the work. Barge-in cancels a turn,
+            # and a turn cancelled while waiting on an escalation should take
+            # the escalation with it: nobody is waiting for that answer now.
+            task.cancel()
+            raise

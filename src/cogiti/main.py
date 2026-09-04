@@ -43,6 +43,11 @@ class TextOutput:
     'no way to reach the user' stays a startup failure rather than a surprise.
     """
 
+    async def say_aloud(self, text):
+        """One sentence of an answer still being written."""
+        if text:
+            print(text, flush=True)
+
     async def say(self, result):
         if result is None:
             return ""
@@ -50,7 +55,8 @@ class TextOutput:
             text = "I couldn't do that: %s" % result.get("message", result.get("kind"))
         else:
             text = result.get("say", "")
-        print(text, flush=True)
+        if not result.get("already_spoken"):
+            print(text, flush=True)
         show = result.get("show")
         if show:
             print("  [would show: %s]" % (show if isinstance(show, str)
@@ -106,7 +112,11 @@ class FaceOutput:
         self._cancel_expiry()
 
         oid = self.p.result(result)
-        marks = await self._marks_for(text)
+        # Already said, sentence by sentence, while it was being written. The
+        # screen still gets its one composed card — that is the half the
+        # protocol keeps whole — but saying the whole answer again would be
+        # the device repeating itself for a minute.
+        marks = None if result.get("already_spoken") else await self._marks_for(text)
         if marks:
             self.p.speak(marks)
             await self._deafen(True)
@@ -237,6 +247,29 @@ class FaceOutput:
 
     def on_thought(self, text):
         self.p.thought(text)
+
+    async def say_aloud(self, text):
+        """One sentence of an answer that is still being written.
+
+        Speech and nothing else. The presentation half of an answer composes
+        once when the result lands — `agent-protocol.md` §7 is emphatic that a
+        half-built `show` would have the screen rendering something about to
+        change — and a spoken sentence has no such problem, because it is gone
+        the moment it leaves.
+        """
+        if not text:
+            return
+        marks = await self._marks_for(text)
+        if not marks:
+            return
+        self.p.speak(marks)
+        await self._deafen(True)
+        try:
+            await self._until_spoken(marks)
+        finally:
+            # As in `say`: a device that stays deaf after an interrupted
+            # sentence is worse than one that never spoke.
+            await self._deafen(False)
 
     def barge_in(self):
         """Someone started speaking over us. Stop the mouth now.

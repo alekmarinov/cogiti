@@ -128,6 +128,15 @@ class AgentRun:
                 self.on_event(msg)
                 _db.append_log(self.db, self.job_id, "event",
                                "%s %s" % (kind, msg.get("text") or msg.get("note", "")))
+            elif kind == "say":
+                # The answer, being spoken while it is still being written.
+                # Listed separately from `thought` and `progress` because
+                # those two are notes about the work and may be dropped under
+                # load — this *is* the work, and a dropped sentence is a hole
+                # in the middle of what somebody heard.
+                self.on_event(msg)
+                _db.append_log(self.db, self.job_id, "event",
+                               "say %s" % (msg.get("text") or ""))
             elif kind == "tool":
                 # Traced before brokering. Without this the trace records no
                 # tools at all, and "why did it do that" — the only question

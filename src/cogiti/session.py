@@ -270,8 +270,13 @@ class Session:
                 # unreachable until last night.
                 return await self._queue(turn)
 
+            # The holding line exists because nothing was happening for five
+            # seconds. If the device has begun answering out loud, something
+            # is happening, and cutting in with "I'll tell you when I have
+            # it" over its own answer is the one thing worse than silence.
             result, running = await detach.with_deadline(
-                escalate.run(self.cogiti, self, turn))
+                escalate.run(self.cogiti, self, turn),
+                answering=lambda: turn.spoke)
             if running is not None:
                 # It is still working. The turn ends anyway — that is the
                 # whole point of the stage — and the answer is delivered when
@@ -289,6 +294,11 @@ class Session:
 
         turn.result = result
         turn.to(State.SPEAKING)
+        if turn.spoke and isinstance(result, dict):
+            # Said already, a sentence at a time while it was being written.
+            # The screen still composes once from this; only the speaking is
+            # suppressed, or the device repeats the whole answer.
+            result = dict(result, already_spoken=True)
         said = await self.cogiti.output.say(result)
         self.cogiti.trace.spoke(self, turn, said)
         # A holding line is not an answer, and it must not be recorded as
@@ -420,6 +430,11 @@ class Session:
                     "message": "that job failed: %s" % t.exception()})
             else:
                 answer = t.result()
+                if turn.spoke and isinstance(answer, dict):
+                    # Streamed already, sentence by sentence. Delivering it
+                    # again would have the device read the whole answer out a
+                    # second time, having just finished saying it.
+                    answer = dict(answer, already_spoken=True)
                 self.cogiti.pending.done(d.job_id, answer)
             self.cogiti.trace.job_done(
                 d.job_id, "cancelled" if t.cancelled() else "done",

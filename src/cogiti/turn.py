@@ -50,6 +50,9 @@ class Turn:
         self._answer = asyncio.Future()
         self._task = None
         self.interrupted = False
+        #: Sentences of the answer already spoken while it was being written.
+        #: A turn that has begun answering is not a turn that has stalled.
+        self.spoke = False
 
     def needs_answer(self):
         """Is something actually waiting on a person right now?
