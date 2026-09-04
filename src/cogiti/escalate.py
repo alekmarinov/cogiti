@@ -48,7 +48,14 @@ def grants(cogiti, text):
     local, and nothing here can tell yet.
     """
     hosts = cogiti.config.list("egress_hosts")
-    return [{"name": "http", "hosts": hosts}], False
+    granted = [{"name": "http", "hosts": hosts}]
+    if cogiti.config["web_search"].strip().lower() in ("1", "true", "yes", "on"):
+        # Named in the grant rather than assumed by the adapter, so it shows up
+        # in the run's tool list and therefore in the dump: "did it search?"
+        # should be answerable from the record, not by inference from the
+        # wording of an answer.
+        granted.append({"name": "web_search"})
+    return granted, False
 
 
 async def run(cogiti, session, turn):

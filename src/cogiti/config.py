@@ -64,6 +64,17 @@ DEFAULTS = {
     # to say why, and that must be recoverable without building an image.
     "attention_s":   "0",
 
+    # Whether an escalation may search the web. Off by default: cogiti is a
+    # general orchestrator and handing a model the open internet is a
+    # deployment's decision, not a library's. InteliBoy turns it on.
+    #
+    # Unlike `egress_hosts` this opens no socket here — the search runs on
+    # Anthropic's side and only the results come back, so there is nothing for
+    # `trust.py` to refuse and no host list to keep. What it does mean is that
+    # anything the model reads can carry instructions, and it is told to treat
+    # what it finds as somebody's writing rather than as orders.
+    "web_search":    "",
+
     "trace_file":    "",          # empty: stderr
 
     # What the agent adapter is given, as `ENV_VAR=secret.name` pairs. Which
