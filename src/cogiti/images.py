@@ -41,6 +41,7 @@ MAX_BYTES = 4 << 20        # a screen shows one picture; this is generous
 TIMEOUT_S = 15
 MAX_HOPS = 3
 KEEP_S = 3600              # how long a fetched picture stays on disk
+KEEP_N = 20                # and how many, whatever their age
 
 #: The first bytes of the formats stb_image will actually decode. A server
 #: may say anything in a header; this is the file agreeing with it.
@@ -122,18 +123,44 @@ def _save(r, into):
     return path
 
 
-def sweep(into, keep_s=KEEP_S):
+def sweep(into, keep_s=KEEP_S, keep_n=KEEP_N):
     """Old pictures go. Nothing refers to them once the card is gone, and a
     device that keeps every photograph it was ever shown fills its own disk
-    at four megabytes a time."""
+    at four megabytes a time.
+
+    **Two rules, because age alone was not enough.** An hour is the right
+    life for a picture nobody is looking at any more — but a run of
+    questions inside that hour accumulates without limit, four megabytes at
+    a time, and the appliance has about four gigabytes free. So a count as
+    well, newest kept.
+
+    Called on startup as well as before each fetch. Sweeping only on the way
+    in meant a device asked for a product once and never again kept those
+    files for as long as it ran, which is every device that is not being
+    tested.
+    """
     now = time.time()
     try:
-        for name in os.listdir(into):
-            p = os.path.join(into, name)
-            try:
-                if now - os.path.getmtime(p) > keep_s:
-                    os.remove(p)
-            except OSError:
-                pass
+        names = os.listdir(into)
+    except OSError:
+        return
+    live = []
+    for name in names:
+        p = os.path.join(into, name)
+        try:
+            age = now - os.path.getmtime(p)
+        except OSError:
+            continue
+        if age > keep_s:
+            _remove(p)
+        else:
+            live.append((age, p))
+    for _age, p in sorted(live)[keep_n:]:
+        _remove(p)
+
+
+def _remove(path):
+    try:
+        os.remove(path)
     except OSError:
         pass

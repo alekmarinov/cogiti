@@ -46,6 +46,19 @@ class TestWhatCountsAsAPicture(unittest.TestCase):
         self.assertEqual(images._sniff(b"\x89PNG\r\n\x1a\n...."), "png")
         self.assertEqual(images._sniff(b"\xff\xd8\xff\xe0...."), "jpg")
 
+    def test_there_is_a_ceiling_on_how_many_are_kept(self):
+        """Age alone was not enough: a run of questions inside the hour
+        accumulates four megabytes at a time, and the appliance has about
+        four gigabytes free."""
+        d = tempfile.mkdtemp()
+        import time as _t
+        for i in range(8):
+            p = os.path.join(d, "%d.jpg" % i)
+            open(p, "wb").close()
+            os.utime(p, (_t.time() - i, _t.time() - i))   # 0 newest
+        images.sweep(d, keep_s=3600, keep_n=3)
+        self.assertEqual(sorted(os.listdir(d)), ["0.jpg", "1.jpg", "2.jpg"])
+
     def test_old_pictures_are_swept(self):
         """Four megabytes at a time, and nothing refers to one once its card
         is gone."""

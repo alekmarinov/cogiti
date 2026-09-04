@@ -814,6 +814,14 @@ class Cogiti:
         # The undo bin, bounded. Swept at startup rather than on a timer: a
         # device that has been off for a month should reclaim on the next boot,
         # and nothing here is urgent enough to need a clock of its own.
+        # Pictures fetched for a panel, on the same reasoning as the undo bin
+        # below: a device that has been off for a month should reclaim on the
+        # next boot, and sweeping only when the next picture arrives means a
+        # device asked once and never again keeps them for as long as it runs.
+        from . import images as _images
+        _images.sweep(os.path.join(os.path.expanduser(self.config["state_dir"]),
+                                   "panels"))
+
         _services.sweep_removed(
             self.removed_root,
             on_warn=lambda m: print("(%s)" % m, file=sys.stderr, flush=True))
