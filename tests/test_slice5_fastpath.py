@@ -34,6 +34,7 @@ class FakeTrace:
     def event(self, *a): pass
     def interrupted(self, *a): pass
     def exchange(self, *a, **k): pass
+    def spoke(self, *a, **k): pass
 
 
 class FakeOutput:

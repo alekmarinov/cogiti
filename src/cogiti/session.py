@@ -285,6 +285,7 @@ class Session:
         turn.result = result
         turn.to(State.SPEAKING)
         said = await self.cogiti.output.say(result)
+        self.cogiti.trace.spoke(self, turn, said)
         # A holding line is not an answer, and it must not be recorded as
         # one. "I'm still working on that" went into the history as the
         # device's reply, so the model read itself saying it and would

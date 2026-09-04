@@ -40,6 +40,21 @@ class Trace:
         if state.value == "idle" and len(row["states"]) > 1:
             self._write(turn, row, "done")
 
+    def spoke(self, session, turn, text):
+        """What the device said back.
+
+        The row held what was heard, how it resolved, which tools ran and how
+        long it took — everything about a turn except its other half. So the
+        one file that has a line per turn could not answer "what did it say?",
+        and reading a conversation back meant the LLM dumps, which exist only
+        for the turns that escalated: every fast-path answer, which is most of
+        them, was spoken and written down nowhere.
+        """
+        if turn is None or id(turn) in self._moved:
+            return
+        if text:
+            self._row(session, turn)["answered"] = text
+
     def exchange(self, session, turn, question=None, answer=None):
         """A question the device put, and what came back.
 
