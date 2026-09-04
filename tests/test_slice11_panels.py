@@ -224,6 +224,43 @@ class TestPanels(unittest.TestCase):
                         "a panel outlived the conversation")
 
 
+class TestWhatIsOnScreen(unittest.TestCase):
+    """So that "tell me more about the first one" has a first one.
+
+    The device drew three products, said their names out loud, and met the
+    obvious follow-up with no idea what was being pointed at — because the
+    only record of the panels was a set of object ids on the way to a socket.
+    """
+
+    def setUp(self):
+        self.a = FakeAdapter()
+        self.p = present.Presenter(self.a)
+
+    def test_it_reports_them_in_the_order_drawn(self):
+        self.p.panels([{"title": "Sketch Pad"}, {"title": "Crystal Kit"},
+                       {"title": "Soccer Ball"}])
+        self.assertEqual(self.p.on_screen(),
+                         ["Sketch Pad", "Crystal Kit", "Soccer Ball"])
+
+    def test_an_empty_stage_has_no_first_one(self):
+        self.assertEqual(self.p.on_screen(), [])
+
+    def test_they_survive_the_answer_that_describes_them(self):
+        """The answer arrives while they are still up, and is usually the
+        sentence naming them."""
+        self.p.panels([{"title": "Sketch Pad"}, {"title": "Crystal Kit"}])
+        self.p.result({"type": "result", "say": "two ideas"})
+        self.assertEqual(len(self.p.on_screen()), 2)
+
+    def test_they_are_forgotten_when_they_leave_the_screen(self):
+        """A stale list is worse than none: it would have the device
+        confidently describing something nobody can see."""
+        self.p.panels([{"title": "Sketch Pad"}, {"title": "Crystal Kit"}])
+        self.p.result({"type": "result", "say": "two ideas"})
+        self.p.result({"type": "result", "say": "something else entirely"})
+        self.assertEqual(self.p.on_screen(), [])
+
+
 class TestThinkingOutLoud(unittest.TestCase):
     """The reasoning stays up while the work goes on behind it."""
 

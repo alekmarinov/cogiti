@@ -30,6 +30,10 @@ class Presenter:
     def __init__(self, adapter):
         self.a = adapter
         self._showing = set()
+        #: What is on the stage, in the order it was drawn, as short strings.
+        #: Not ids: "the first one" is a thing a person says about what they
+        #: can see, and `brain/panels/0` answers a different question.
+        self._onscreen = []
         #: Panels drawn during the turn that is still being answered. They
         #: belong to the answer that is coming, not to the one before it.
         self._this_turn = set()
@@ -144,6 +148,7 @@ class Presenter:
                         fallback=item.get("title") or "")
             self._showing.add(oid)
             self._this_turn.add(oid)
+            self._onscreen.append(item.get("title") or item.get("lines") or "")
             drawn.append(oid)
         return drawn or None
 
@@ -250,6 +255,17 @@ class Presenter:
             return show.get("id", ANSWER)
         return ANSWER
 
+    def on_screen(self):
+        """What a person standing in front of it can see, in order.
+
+        So that "tell me more about the first one" has a first one. The
+        device drew three products, said their names out loud, and then met
+        the obvious follow-up with no idea what was being pointed at —
+        because the only record of the panels was a set of object ids on the
+        way to a socket.
+        """
+        return [t for t in self._onscreen if t]
+
     def _clear_previous(self, keeping):
         """Everything from before this answer goes; what this answer drew stays.
 
@@ -260,10 +276,18 @@ class Presenter:
         because from here a panel drawn ten seconds ago is indistinguishable
         from an answer to the previous question.
         """
+        gone = False
         for oid in list(self._showing):
             if oid != keeping and oid not in self._this_turn:
                 self.a.send(op="destroy", id=oid)
                 self._showing.discard(oid)
+                if oid.startswith(self.PANELS):
+                    gone = True
+        if gone:
+            # They are off the screen, so they are no longer what "the first
+            # one" means. A stale list is worse than none: it would have the
+            # device confidently describing something nobody can see.
+            self._onscreen = []
         self._this_turn.clear()
 
     def expire(self, oid):

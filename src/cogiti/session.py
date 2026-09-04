@@ -829,6 +829,13 @@ class Session:
             out["pinned"] = [s.m.title for s in live]
         except Exception:                                     # noqa: BLE001
             pass
+        try:
+            p = getattr(self.cogiti.output, "p", None)
+            seen = p.on_screen() if p is not None else None
+            if seen:
+                out["on_screen"] = seen
+        except Exception:                                     # noqa: BLE001
+            pass
         if self._last_turn_ns:
             gap = (_time.monotonic_ns() - self._last_turn_ns) // 1_000_000_000
             # A gap is the difference between a follow-up and a fresh start,
