@@ -29,6 +29,7 @@ somebody else, which makes it exactly the input least worth trusting:
 """
 
 import hashlib
+import html
 import os
 import re
 import time
@@ -40,6 +41,7 @@ from . import trust
 
 MAX_BYTES = 4 << 20        # a screen shows one picture; this is generous
 MAX_PAGE_BYTES = 2 << 20   # enough of a page to reach its <head>
+MAX_SCAN_BYTES = 6 << 20   # and enough of it to reach the photographs
 
 #: Smaller than this on either side and it is a logo, not a photograph. Real
 #: pages say so: asked for four USB sticks, two of the `og:image` tags led to
@@ -72,6 +74,89 @@ META = (re.compile(rb'<meta[^>]+property=["\']og:image["\'][^>]+content='
 
 class Refused(Exception):
     """Not fetched, and why in a sentence somebody can act on."""
+
+
+#: An <img>, and what the page says it shows. `alt` is the whole point: it is
+#: the page's own words for the picture, and the only thing that tells one
+#: photograph on a roundup from another.
+# 2000, not 600: a modern <img> carries srcset with half a dozen widths
+#: and the tag runs long. At 600 the pattern never reached the closing
+#: bracket on Wikipedia's article images — forty-eight of them in the
+#: page, none of them found, and what came back was the chrome.
+IMG = re.compile(rb'<img\s([^>]{0,2000}?)>', re.I)
+ATTR = re.compile(rb'(src|data-src|srcset|alt)\s*=\s*["\']([^"\']*)', re.I)
+
+#: Filenames that are furniture. Cheap and not exhaustive — the size check on
+#: download catches the rest, and the model can see these names anyway.
+FURNITURE = ("logo", "icon", "sprite", "avatar", "badge", "banner-ad",
+             "placeholder", "1x1", "pixel", "spacer")
+
+#: What the renderer can actually decode — stb_image, so no SVG and no WebP.
+#: Filtering here rather than on download because a page's markup is mostly
+#: furniture: the first pass over a review site returned three tracking
+#: pixels, five SVG chrome icons and a literal SPONSORED_IMAGE_URL before it
+#: reached a photograph.
+DRAWABLE = (".jpg", ".jpeg", ".png", ".gif", ".bmp")
+
+
+def candidates(url, limit=24):
+    """Every picture on a page, with the page's own words for each.
+
+    `og:image` answers "what represents this page", which on a roundup is the
+    banner and not the product — the reason the pictures were arriving
+    irrelevant. This answers a different question: what is here, and what
+    does the page call it. Choosing between them needs judgement about what
+    was asked, which is the model's job and not this module's.
+
+    So the split is: cogiti can read markup and the model cannot, the model
+    knows what was asked and cogiti does not, and neither has to pretend
+    otherwise.
+    """
+    # More than `from_page` reads: og:image is in the <head> and the
+    # photographs are wherever the article put them, which on a review site
+    # is after several hundred kilobytes of navigation.
+    body, final = _read(url, MAX_SCAN_BYTES, wanted="text/html", whole=False)
+    out, seen = [], set()
+    for pattern in META:
+        m = pattern.search(body)
+        if m:
+            src = urllib.parse.urljoin(
+                final,
+                html.unescape(m.group(1).decode("utf-8", "replace").strip()))
+            out.append({"url": src, "alt": "(the page's own header image)"})
+            seen.add(src)
+            break
+    for tag in IMG.finditer(body):
+        attrs = {k.decode().lower(): v.decode("utf-8", "replace")
+                 for k, v in ATTR.findall(tag.group(1))}
+        src = attrs.get("src") or attrs.get("data-src") or ""
+        if not src and attrs.get("srcset"):
+            src = attrs["srcset"].split(",")[0].strip().split(" ")[0]
+        # Unescaped, because an href in markup is HTML: `&amp;` is one
+        # ampersand, and leaving it made every URL with a query string —
+        # which is most of a CDN's — a 404 waiting to happen.
+        src = html.unescape(src.strip())
+        if not src or src.startswith("data:"):
+            continue
+        src = urllib.parse.urljoin(final, src)
+        if not src.startswith("https://") or src in seen:
+            continue
+        low = src.lower()
+        path = urllib.parse.urlparse(low).path
+        if not path.endswith(DRAWABLE):
+            continue
+        if any(word in low for word in FURNITURE):
+            continue
+        seen.add(src)
+        out.append({"url": src,
+                    "alt": html.unescape(attrs.get("alt") or "").strip()[:120]})
+    # Described first. `alt` is the page's own words for the picture and the
+    # only thing that separates one photograph on a roundup from another, so
+    # an undescribed image is the last thing worth offering.
+    out.sort(key=lambda c: not c["alt"])
+    if not out:
+        raise Refused("no pictures on that page that this screen can draw")
+    return out[:limit]
 
 
 def from_page(url, into):

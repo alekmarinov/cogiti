@@ -55,6 +55,8 @@ def grants(cogiti, text):
     # it had shown them.
     if getattr(getattr(cogiti, "output", None), "p", None) is not None:
         granted.append({"name": "display", "schema": panels_tool.tool()})
+        granted.append({"name": "find_pictures",
+                        "schema": panels_tool.picture_tool()})
     if cogiti.config["web_search"].strip().lower() in ("1", "true", "yes", "on"):
         # Named in the grant rather than assumed by the adapter, so it shows up
         # in the run's tool list and therefore in the dump: "did it search?"
@@ -122,6 +124,8 @@ async def run(cogiti, session, turn):
     # function call away, and spawning a process to do it would be absurd.
     if any(t.get("name") == "display" for t in tools):
         run.local_tools["display"] = lambda args: panels_tool.run(cogiti, args)
+        run.local_tools["find_pictures"] = (
+            lambda args: panels_tool.find(cogiti, args))
 
     # The turn keeps a handle on it, because a turn that stops waiting still
     # has to be able to name what it stopped waiting for. Without this the

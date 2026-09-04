@@ -103,6 +103,63 @@ class FakeAdapter:
         return True
 
 
+class TestChoosingAPicture(unittest.TestCase):
+    """cogiti reads the markup; the model judges relevance.
+
+    Neither can do the other's half: a page reaches the model as extracted
+    text with the img tags stripped, and cogiti has no idea what was asked.
+    `og:image` was cogiti guessing at relevance alone, and on a roundup page
+    it answers "what represents this page" — the banner — which is why the
+    pictures kept arriving irrelevant.
+    """
+
+    PAGE = (b'<html><head>'
+            b'<meta property="og:image" content="https://x.test/banner.jpg">'
+            b'</head><body>'
+            b'<img src="/logo.png" alt="site logo">'
+            b'<img src="data:image/png;base64,AAAA" alt="inline">'
+            b'<img src="https://x.test/chrome.svg" alt="an icon">'
+            b'<img src="//cdn.test/SanDisk_Ultra_Flair.jpg?w=1&amp;h=2">'
+            b'<img src="/photos/kingston.jpg" alt="Kingston DataTraveler">'
+            b'</body></html>')
+
+    def candidates(self):
+        import cogiti.images as im
+        real = im._read
+        im._read = lambda *a, **k: (self.PAGE, "https://x.test/review")
+        try:
+            return im.candidates("https://x.test/review")
+        finally:
+            im._read = real
+
+    def test_it_offers_what_the_screen_can_draw(self):
+        urls = [c["url"] for c in self.candidates()]
+        self.assertIn("https://cdn.test/SanDisk_Ultra_Flair.jpg?w=1&h=2", urls)
+        self.assertIn("https://x.test/photos/kingston.jpg", urls)
+
+    def test_entities_are_unescaped(self):
+        """`&amp;` is one ampersand. Leaving it made every URL with a query
+        string — which is most of a CDN's — a 404 waiting to happen."""
+        urls = " ".join(c["url"] for c in self.candidates())
+        self.assertIn("w=1&h=2", urls)
+        self.assertNotIn("&amp;", urls)
+
+    def test_furniture_and_undrawable_formats_are_left_out(self):
+        """The first pass over a real review site returned tracking pixels,
+        SVG chrome and a literal SPONSORED_IMAGE_URL before it reached a
+        photograph. stb_image cannot draw SVG in any case."""
+        urls = " ".join(c["url"] for c in self.candidates())
+        for junk in ("logo.png", "chrome.svg", "data:"):
+            self.assertNotIn(junk, urls)
+
+    def test_described_pictures_come_first(self):
+        """alt is the page's own words for the picture. It is often empty,
+        which is why the file name goes back too — SanDisk_Ultra_Flair.jpg
+        tells a model everything it needs."""
+        cs = self.candidates()
+        self.assertTrue(cs[0]["alt"], "an undescribed picture was offered first")
+
+
 class TestPanels(unittest.TestCase):
     def setUp(self):
         self.a = FakeAdapter()

@@ -79,6 +79,48 @@ def tool():
     }
 
 
+def picture_tool():
+    return {
+        "name": "find_pictures",
+        "description":
+            "List the pictures on a web page, so you can choose one. Give an "
+            "https page address — a review, a product listing, an "
+            "encyclopedia entry — and you get back each picture's URL and "
+            "whatever the page says it shows. You cannot see images in a "
+            "page you fetch, because fetching gives you text; this is how "
+            "you find out what is on it. Judge by the description and by the "
+            "file name, which usually names the product even when the "
+            "description is empty, then pass the one you want to `display` "
+            "as `image_url`.",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["page"],
+            "properties": {"page": {"type": "string",
+                                    "description": "https url of the page"}},
+        },
+    }
+
+
+async def find(cogiti, args):
+    """What is on that page, for the model to choose between.
+
+    The split that makes this work: cogiti can read markup and the model
+    cannot; the model knows what was asked and cogiti does not. `og:image`
+    was cogiti guessing at relevance on its own, and on a roundup page it
+    answers "what represents this page" — the banner — which is why the
+    pictures kept arriving irrelevant.
+    """
+    page = ((args or {}).get("page") or "").strip()
+    if not page:
+        return {"ok": False, "problem": "no page"}
+    try:
+        found = images.candidates(page)
+    except images.Refused as e:
+        return {"ok": False, "problem": str(e)}
+    return {"ok": True, "pictures": found}
+
+
 async def run(cogiti, args):
     """Fetch what it named and draw it. Says which pictures did not arrive."""
     wanted = (args or {}).get("panels") or []
