@@ -36,6 +36,33 @@ def _host_of(url):
     return parts.hostname.lower().rstrip(".")
 
 
+def public_only(url):
+    """The address half of `check`, with no allowlist. Returns the host.
+
+    For fetching something the *model* chose — a product photograph off a
+    search result — where an allowlist cannot work: nobody can enumerate the
+    image CDNs of everything a person might ask about, and a list that has to
+    be complete to be useful is a list that fails closed on the first real
+    question.
+
+    So the rule is the one that actually protects anything here: https, and
+    never an address on this network. `check`'s allowlist stops a *job* from
+    reaching a host nobody approved; this stops anything at all from reaching
+    the router, the printer, or the box next to it — which is the attack the
+    allowlist was never the defence against.
+    """
+    from urllib.parse import urlparse
+    u = urlparse(url or "")
+    if u.scheme != "https":
+        raise EgressDenied(u.hostname or "", "only https, not %r"
+                           % (u.scheme or "nothing"), [])
+    host = (u.hostname or "").lower()
+    if not host:
+        raise EgressDenied("", "no host in that url", [])
+    _refuse_private(host)
+    return host
+
+
 def _matches(host, pattern):
     """Exact, or one leading '*.' for a subdomain wildcard.
 

@@ -30,6 +30,9 @@ class Presenter:
     def __init__(self, adapter):
         self.a = adapter
         self._showing = set()
+        #: Panels drawn during the turn that is still being answered. They
+        #: belong to the answer that is coming, not to the one before it.
+        self._this_turn = set()
 
     # ------------------------------------------------------------- states --
 
@@ -95,6 +98,54 @@ class Presenter:
         if HEARD in self._showing:
             self.a.send(op="destroy", id=HEARD)
             self._showing.discard(HEARD)
+
+    PANELS = "brain/panels"
+
+    def panels(self, items):
+        """Several things side by side, each a picture with words under it.
+
+        `result` says why this is a separate method rather than two answers
+        left on the stage: keeping two cards up is a deliberate act, and the
+        protocol has a shape for it — one group, declared by whoever decided
+        the things belong together. Two cards that merely happened in a row
+        are not a comparison.
+
+        One group per item, and the adapter gives groups on the stage a
+        common width so the rows line up and the eye can read across. No
+        coordinate is sent, here or anywhere: which column a thing lands in
+        is the only party that knows the screen's business.
+
+        An item without a picture still draws. The alternative is that one
+        unreachable photograph loses the specifications as well, which is the
+        wrong way round — the words were the answer and the picture was the
+        illustration.
+        """
+        if not items:
+            return None
+        self.clear_thoughts()
+        self.clear_heard()
+        self._clear_previous(self.PANELS)
+        drawn = []
+        for i, item in enumerate(items):
+            children = []
+            if item.get("image"):
+                children.append({"kind": "image", "src": item["image"]})
+            if item.get("title"):
+                children.append({"kind": "text", "style": "title",
+                                 "text": item["title"]})
+            if item.get("lines"):
+                children.append({"kind": "text", "style": "caption",
+                                 "text": item["lines"]})
+            if not children:
+                continue
+            oid = "%s/%d" % (self.PANELS, i)
+            self.a.send(op="create", id=oid, kind="group", children=children,
+                        region=STAGE, lifetime=TURN, attention="once",
+                        fallback=item.get("title") or "")
+            self._showing.add(oid)
+            self._this_turn.add(oid)
+            drawn.append(oid)
+        return drawn or None
 
     def result(self, result):
         """The answer, as an object the adapter may later update or be asked
@@ -189,10 +240,20 @@ class Presenter:
         return ANSWER
 
     def _clear_previous(self, keeping):
+        """Everything from before this answer goes; what this answer drew stays.
+
+        The distinction is the whole of it, and leaving it out cost a turn
+        that worked perfectly and showed nothing: the model searched, found a
+        product, fetched the photograph and drew the panel — then said "the
+        specs are on the screen" while this destroyed them a second later,
+        because from here a panel drawn ten seconds ago is indistinguishable
+        from an answer to the previous question.
+        """
         for oid in list(self._showing):
-            if oid != keeping:
+            if oid != keeping and oid not in self._this_turn:
                 self.a.send(op="destroy", id=oid)
                 self._showing.discard(oid)
+        self._this_turn.clear()
 
     def expire(self, oid):
         """Take one object down because its time is up.

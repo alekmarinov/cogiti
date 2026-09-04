@@ -9,6 +9,7 @@ asked for — never widened later because something the agent read suggested it.
 """
 
 from . import device_tool
+from . import panels_tool
 from . import secrets
 from .adapters import agent
 
@@ -49,6 +50,11 @@ def grants(cogiti, text):
     """
     hosts = cogiti.config.list("egress_hosts")
     granted = [{"name": "http", "hosts": hosts}]
+    # Only where there is a screen. Offering it to a terminal deployment
+    # would have the model composing panels nobody can see, and then saying
+    # it had shown them.
+    if getattr(getattr(cogiti, "output", None), "p", None) is not None:
+        granted.append({"name": "display", "schema": panels_tool.tool()})
     if cogiti.config["web_search"].strip().lower() in ("1", "true", "yes", "on"):
         # Named in the grant rather than assumed by the adapter, so it shows up
         # in the run's tool list and therefore in the dump: "did it search?"
@@ -101,6 +107,11 @@ async def run(cogiti, session, turn):
         run.local_tools["device"] = (
             lambda args: device_tool.run(cogiti, offers, args,
                                          "%s/%s" % session.key, turn))
+
+    # Answered here for the same reason `device` is: fetching a picture is a
+    # function call away, and spawning a process to do it would be absurd.
+    if any(t.get("name") == "display" for t in tools):
+        run.local_tools["display"] = lambda args: panels_tool.run(cogiti, args)
 
     # The turn keeps a handle on it, because a turn that stops waiting still
     # has to be able to name what it stopped waiting for. Without this the

@@ -1,0 +1,106 @@
+"""Putting pictures on the screen, offered to the model as a tool.
+
+An escalation could say a thing and show one line of text. Asked to compare
+two products it produced a paragraph, out loud, listing figures — which is
+the one job a screen is better at than a voice, on a device that has a
+screen.
+
+The model does not draw anything and is not given a path. It names what it
+wants shown and where each picture is on the web; cogiti fetches, checks and
+draws. That is the same rule as everywhere else here — an agent proposes and
+cogiti decides — and it is what keeps `images.py`'s limits in force rather
+than optional.
+
+**A failed picture is not a failed panel.** The words were the answer and the
+photograph was the illustration, so a panel whose image will not load still
+draws, and the model is told which ones did not so it can say so rather than
+describe something nobody can see.
+"""
+
+from . import images
+
+MAX_PANELS = 4          # a stage, not a catalogue
+MAX_LINES = 400         # what fits under a picture before it stops being read
+
+
+def tool():
+    return {
+        "name": "display",
+        "description":
+            "Put one or more things on the screen, each as a picture with a "
+            "title and a few lines under it. Use it whenever the answer is "
+            "something to look at rather than only to hear — a product, a "
+            "comparison, anything with a photograph or a set of figures. "
+            "Say the short version out loud and let the screen carry the "
+            "detail; do not read the specifications aloud one by one. "
+            "Pictures must be https URLs you actually found, never invented, "
+            "and a panel still appears if its picture cannot be fetched.",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["panels"],
+            "properties": {
+                "panels": {
+                    "type": "array",
+                    "description": "up to %d, shown side by side" % MAX_PANELS,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["title"],
+                        "properties": {
+                            "title": {"type": "string"},
+                            "image_url": {
+                                "type": "string",
+                                "description": "https url of a picture of it",
+                            },
+                            "lines": {
+                                "type": "string",
+                                "description": "a few short lines, one per "
+                                               "fact, separated by newlines",
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+async def run(cogiti, args):
+    """Fetch what it named and draw it. Says which pictures did not arrive."""
+    wanted = (args or {}).get("panels") or []
+    if not isinstance(wanted, list) or not wanted:
+        return {"ok": False, "problem": "no panels"}
+
+    into = cogiti.config["state_dir"]
+    import os
+    into = os.path.join(os.path.expanduser(into), "panels")
+
+    items, missing = [], []
+    for spec in wanted[:MAX_PANELS]:
+        if not isinstance(spec, dict):
+            continue
+        item = {"title": (spec.get("title") or "").strip(),
+                "lines": (spec.get("lines") or "")[:MAX_LINES]}
+        url = (spec.get("image_url") or "").strip()
+        if url:
+            try:
+                item["image"] = images.fetch(url, into)
+            except images.Refused as e:
+                # Named, not swallowed. The model is about to describe this
+                # panel out loud and should not describe a picture that is
+                # not there.
+                missing.append("%s (%s)" % (item["title"] or url, e))
+        items.append(item)
+
+    presenter = getattr(cogiti.output, "p", None)
+    if presenter is None or not hasattr(presenter, "panels"):
+        return {"ok": False,
+                "problem": "this device has no screen to put them on"}
+    drawn = presenter.panels(items)
+    if not drawn:
+        return {"ok": False, "problem": "nothing in those panels to draw"}
+    out = {"ok": True, "shown": len(drawn)}
+    if missing:
+        out["no_picture_for"] = missing
+    return out
