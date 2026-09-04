@@ -148,10 +148,20 @@ class Trace:
         elif kind == "thought":
             row["thoughts"] += 1
 
-    def job_done(self, job_id, outcome="done"):
+    def job_done(self, job_id, outcome="done", answered=None):
+        """Close a detached row, with what was eventually said.
+
+        Without the answer the transcript read as a monologue: nine of twelve
+        turns in one evening's conversation were escalations, and every one
+        of them recorded the question, the tools, the milliseconds — and
+        "(nothing said)" — because the answer arrives a minute later, outside
+        the turn, and was written down nowhere.
+        """
         row = self._rows.get(job_id)
         if row is None:
             return
+        if answered:
+            row["answered"] = answered
         row["outcome"] = outcome
         row["ms"] = (time.monotonic_ns() - row.pop("started_ns")) // 1_000_000
         self._moved.discard(row.pop("_turn", None))

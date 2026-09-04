@@ -406,6 +406,7 @@ class Session:
         self.cogiti.pending.add(d)
 
         def arrived(t):
+            answer = None
             if t.cancelled():
                 self.cogiti.pending.drop(d.job_id)
             elif t.exception() is not None:
@@ -413,9 +414,11 @@ class Session:
                     "type": "failed", "kind": "job",
                     "message": "that job failed: %s" % t.exception()})
             else:
-                self.cogiti.pending.done(d.job_id, t.result())
+                answer = t.result()
+                self.cogiti.pending.done(d.job_id, answer)
             self.cogiti.trace.job_done(
-                d.job_id, "cancelled" if t.cancelled() else "done")
+                d.job_id, "cancelled" if t.cancelled() else "done",
+                answered=(answer or {}).get("say"))
             # A slot just opened. This is the only moment one does.
             asyncio.ensure_future(self.start_queued())
             # And say it, if nobody is talking. Delivery used to happen only
