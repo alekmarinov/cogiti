@@ -398,6 +398,47 @@ class TestBeingAddressed(Base):
         self.assertEqual(s.attention_s(), 0.0)
 
 
+class TestAWeakMatchMidConversation(Base):
+    """reflexi resolves each utterance alone. Its context buffer handles
+    follow-ups of four tokens or fewer — "and tomorrow?" inherits — and a
+    longer one is matched standalone, where it can drift.
+
+    Measured: "show me the results with example pictures", said straight
+    after a product recommendation, scored 0.539 against `list_services`,
+    inside the confirm band. The device asked about services and cancelled.
+    """
+
+    def weak(self, intent="list_services"):
+        return FakeDecision(intent, verdict="confirm", tier="similar")
+
+    async def test_it_escalates_instead_of_asking(self):
+        c, s = self.session({"show me the results": self.weak()},
+                            {"list_services": command("list_services")})
+        s._last_turn_ns = __import__("time").monotonic_ns()   # just spoke
+        await s.utterance("show me the results")
+        self.assertEqual(c.escalated, ["show me the results"])
+        self.assertEqual(c.ran, [], "it acted on a 54% guess")
+
+    async def test_out_of_the_window_it_still_asks(self):
+        """Nothing is going on, so the resolver's guess is the best thing
+        anybody has and a question is the cheap way to check it."""
+        import time as _t
+        c, s = self.session({"show me the results": self.weak()},
+                            {"list_services": command("list_services")})
+        s._last_turn_ns = _t.monotonic_ns() - int(120e9)      # two minutes ago
+        await s.utterance("show me the results")
+        self.assertEqual(c.escalated, [], "it escalated a standalone command")
+
+    async def test_a_confident_match_is_untouched(self):
+        """Only the unsure band moves. `handle` still acts, immediately,
+        which is the whole reason the fast path exists."""
+        c, s = self.session({"what is pinned": FakeDecision("list_services")},
+                            {"list_services": command("list_services")})
+        s._last_turn_ns = __import__("time").monotonic_ns()
+        await s.utterance("what is pinned")
+        self.assertEqual([i for i, _ in c.ran], ["list_services"])
+
+
 class TestARoomIsNotARequest(Base):
     """A single word the resolver made nothing of is not worth a model call.
 

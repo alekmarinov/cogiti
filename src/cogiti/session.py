@@ -75,6 +75,11 @@ HISTORY = 20
 #: the reply and the acknowledgement.
 ADDRESSING = ("wake", "greeting")
 
+#: How long after speaking an utterance may still be a follow-up. Matches
+#: reflexi's own `[context] window_ms`, which is 45 seconds — the two are
+#: answering the same question and should not disagree about it.
+FOLLOW_UP_S = 45.0
+
 #: And the one that means "we are done". `stop` already meant stop talking;
 #: to a person it always also meant stop listening, and now it does.
 RELEASING = ("stop",)
@@ -577,6 +582,31 @@ class Session:
         if cmd is None:
             return None
 
+        if decision.verdict == "confirm" and self.mid_conversation():
+            # **Unsure, mid-conversation: ask the party that has the
+            # conversation.**
+            #
+            # reflexi resolves each utterance alone. It has a context buffer
+            # for follow-ups, and thresholds.toml caps those at four tokens —
+            # "and tomorrow?" inherits, a whole sentence does not, and that
+            # limit is right: a full utterance that merely happens to follow
+            # another is its own.
+            #
+            # So a long follow-up is matched standalone and can drift.
+            # Measured: "show me the results with example pictures", said
+            # straight after a product recommendation, scored 0.539 against
+            # `list_services` — inside the confirm band — and the device
+            # asked about services and then cancelled.
+            #
+            # The band is justified as "a confirm is a much cheaper mistake
+            # than a wrong action", and that is true of a *standalone*
+            # command. Mid-conversation it is not the choice on offer: the
+            # model can reach every one of these through the device tool, and
+            # anything carrying a `confirm` still asks, in the table's own
+            # words. The question is not skipped — it is asked by whoever can
+            # see what the conversation is about.
+            return None
+
         if decision.verdict == "confirm":
             # The resolver decided this needs asking; the table only supplies
             # the wording. cogiti never auto-answers one and never lets an
@@ -666,6 +696,19 @@ class Session:
 
     def release(self):
         self._attending_until = 0.0
+
+    def mid_conversation(self):
+        """Is something still going on that an utterance could be part of?
+
+        The same window reflexi uses for its own follow-ups, so the two
+        agree about when a conversation is live rather than each having an
+        opinion.
+        """
+        import time as _time
+        if not self._last_turn_ns:
+            return False
+        gap = (_time.monotonic_ns() - self._last_turn_ns) / 1e9
+        return gap <= FOLLOW_UP_S
 
     def _addressed(self, decision):
         """Is this being said to the device, or merely near it?

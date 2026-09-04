@@ -68,6 +68,16 @@ async def run(cogiti, session, turn):
     tools, allow_private = grants(cogiti, turn.text)
 
     prompt = {"text": turn.text, "context": session.context()}
+    # What the fast path made of it, when it made something and was unsure.
+    # A weak match mid-conversation now comes here instead of being asked
+    # about, and arriving with the resolver's guess attached means nothing is
+    # thrown away — the model can act on it or set it aside, where before it
+    # was told only the words.
+    d = turn.decision
+    if (getattr(d, "intent_id", None)
+            and getattr(d, "verdict", None) == "confirm"):
+        prompt["resolver"] = {"guessed": d.intent_id,
+                              "confidence": round(d.confidence or 0.0, 3)}
     budget = {"wall_ms": 120000}
 
     # The adapter's environment carries whatever credential it was granted; a
