@@ -33,8 +33,14 @@ def tool():
             "comparison, anything with a photograph or a set of figures. "
             "Say the short version out loud and let the screen carry the "
             "detail; do not read the specifications aloud one by one. "
-            "Pictures must be https URLs you actually found, never invented, "
-            "and a panel still appears if its picture cannot be fetched.",
+"For a picture, prefer `image_page`: give the https address of a page "
+            "about the thing — a review, a product listing, an encyclopedia "
+            "entry — and the device reads that page's own photograph off it. "
+            "You cannot see images in a fetched page, because fetching gives "
+            "you text, so naming the page is how you get one without "
+            "guessing at a URL. Use `image_url` only when you have the "
+            "address of the image itself. A panel still appears if its "
+            "picture cannot be fetched, so never invent either one.",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -51,7 +57,14 @@ def tool():
                             "title": {"type": "string"},
                             "image_url": {
                                 "type": "string",
-                                "description": "https url of a picture of it",
+                                "description": "https url of the image file "
+                                               "itself, if you have one",
+                            },
+                            "image_page": {
+                                "type": "string",
+                                "description": "https url of a page about it; "
+                                               "the device takes the picture "
+                                               "from the page",
                             },
                             "lines": {
                                 "type": "string",
@@ -83,9 +96,11 @@ async def run(cogiti, args):
         item = {"title": (spec.get("title") or "").strip(),
                 "lines": (spec.get("lines") or "")[:MAX_LINES]}
         url = (spec.get("image_url") or "").strip()
-        if url:
+        page = (spec.get("image_page") or "").strip()
+        if url or page:
             try:
-                item["image"] = images.fetch(url, into)
+                item["image"] = (images.fetch(url, into) if url
+                                 else images.from_page(page, into))
             except images.Refused as e:
                 # Named, not swallowed. The model is about to describe this
                 # panel out loud and should not describe a picture that is

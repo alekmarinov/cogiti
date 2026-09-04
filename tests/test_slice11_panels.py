@@ -46,6 +46,25 @@ class TestWhatCountsAsAPicture(unittest.TestCase):
         self.assertEqual(images._sniff(b"\x89PNG\r\n\x1a\n...."), "png")
         self.assertEqual(images._sniff(b"\xff\xd8\xff\xe0...."), "jpg")
 
+    def test_a_site_icon_is_not_a_photograph(self):
+        """Asked for four USB sticks, two of the pages' own og:image tags led
+        to a 30x30 and a 100x90 — a site icon, offered in the same field and
+        with the same confidence as a 2048x1536 product shot."""
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+               + (30).to_bytes(4, "big") + (30).to_bytes(4, "big"))
+        self.assertEqual(images._dimensions(png, "png"), (30, 30))
+        big = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+               + (1200).to_bytes(4, "big") + (800).to_bytes(4, "big"))
+        self.assertEqual(images._dimensions(big, "png"), (1200, 800))
+        self.assertLess(30, images.MIN_SIDE)
+        self.assertGreater(800, images.MIN_SIDE)
+
+    def test_dimensions_of_something_unreadable_do_not_raise(self):
+        """A picture whose header cannot be read is kept, not refused: the
+        check is here to catch favicons, not to be a second decoder."""
+        self.assertEqual(images._dimensions(b"nonsense", "png"), (0, 0))
+        self.assertEqual(images._dimensions(b"\xff\xd8\xff", "jpg"), (0, 0))
+
     def test_there_is_a_ceiling_on_how_many_are_kept(self):
         """Age alone was not enough: a run of questions inside the hour
         accumulates four megabytes at a time, and the appliance has about
