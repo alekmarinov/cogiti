@@ -80,6 +80,11 @@ ADDRESSING = ("wake", "greeting")
 #: answering the same question and should not disagree about it.
 FOLLOW_UP_S = 45.0
 
+
+def _debug():
+    import os
+    return bool(os.environ.get("COGITI_TURN_DEBUG"))
+
 #: And the one that means "we are done". `stop` already meant stop talking;
 #: to a person it always also meant stop listening, and now it does.
 RELEASING = ("stop",)
@@ -597,6 +602,14 @@ class Session:
         if cmd is None:
             return None
 
+        if decision.verdict == "confirm" and _debug():
+            import time as _t
+            gap = ((_t.monotonic_ns() - self._last_turn_ns) / 1e9
+                   if self._last_turn_ns else -1.0)
+            print("(confirm %s: mid=%s gap=%.1fs pending=%d)"
+                  % (decision.intent_id, self.mid_conversation(), gap,
+                     len(getattr(self.cogiti.pending, "running", {}) or {})),
+                  file=sys.stderr, flush=True)
         if decision.verdict == "confirm" and self.mid_conversation():
             # **Unsure, mid-conversation: ask the party that has the
             # conversation.**
@@ -720,6 +733,24 @@ class Session:
         opinion.
         """
         import time as _time
+        # **What is still on the screen counts, however long ago it went up.**
+        #
+        # Three products are up, somebody reads them for a minute and asks
+        # "tell me more about the first one" — measured at 58 seconds, past
+        # the window, so it was treated as a fresh command, matched
+        # `repeat` at 0.58 and answered "Are you sure?".
+        #
+        # Silence in front of a screen full of what the device just offered
+        # is not a lapsed conversation, it is somebody reading. The clock is
+        # the wrong instrument for that: what makes this a follow-up is that
+        # the thing being asked about is still there.
+        try:
+            p = getattr(self.cogiti.output, "p", None)
+            if p is not None and p.on_screen():
+                return True
+        except Exception:                                     # noqa: BLE001
+            pass
+
         # **Owing somebody an answer counts.** The clock below starts when a
         # turn *ends*, and a detached escalation ends five seconds in while
         # the answer takes another minute — so the window expired on somebody

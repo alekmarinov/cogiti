@@ -442,6 +442,43 @@ class TestAWeakMatchMidConversation(Base):
         await s.utterance("show me the results")
         self.assertEqual(c.escalated, ["show me the results"])
 
+    async def test_what_is_on_screen_keeps_the_conversation_open(self):
+        """Three products up, somebody reads them for a minute and asks
+        "tell me more about the first one" — measured at 58 seconds, past
+        the window, matched `repeat` at 0.58 and answered "Are you sure?".
+        Silence in front of what the device just offered is somebody
+        reading, not a conversation that ended."""
+        import time as _t
+
+        class Screen:
+            def on_screen(self):
+                return ["Sketch Pad", "Crystal Kit", "Soccer Ball"]
+
+        c, s = self.session({"tell me more about the first one":
+                             self.weak("repeat")},
+                            {"repeat": command("repeat")})
+        c.output.p = Screen()
+        s._last_turn_ns = _t.monotonic_ns() - int(120e9)      # two minutes ago
+        await s.utterance("tell me more about the first one")
+        self.assertEqual(c.escalated, ["tell me more about the first one"])
+        self.assertEqual(c.ran, [], "it acted on a 58% guess")
+
+    async def test_an_empty_screen_does_not(self):
+        """Nothing up and nothing said for two minutes is a fresh command,
+        and a question is the cheap way to check it."""
+        import time as _t
+
+        class Blank:
+            def on_screen(self):
+                return []
+
+        c, s = self.session({"show me the results": self.weak()},
+                            {"list_services": command("list_services")})
+        c.output.p = Blank()
+        s._last_turn_ns = _t.monotonic_ns() - int(120e9)
+        await s.utterance("show me the results")
+        self.assertEqual(c.escalated, [])
+
     async def test_a_confident_match_is_untouched(self):
         """Only the unsure band moves. `handle` still acts, immediately,
         which is the whole reason the fast path exists."""
