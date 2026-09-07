@@ -219,6 +219,26 @@ class Session:
             # nothing is spoken — a device that says "sorry, I didn't catch
             # that" over two people talking is itself the interruption it is
             # apologising for.
+            #
+            # **But not nothing at all.** Silence here is indistinguishable
+            # from a broken device, and was: the same question went up on the
+            # screen three times with the face motionless, until a greeting
+            # opened the window and the fourth attempt answered. Nobody
+            # watching that can tell "I am ignoring you on purpose" from "I am
+            # not working", and the transcript appearing makes it worse by
+            # proving it heard.
+            #
+            # So it shakes its head. That is a gesture rather than a sentence
+            # for the reason above — speaking over the room is the
+            # interruption this is avoiding — and it is `not_for_me` rather
+            # than a shake here, because which motion says it belongs to the
+            # face (architecture.md §2).
+            try:
+                self.cogiti.output.not_for_me()
+            except Exception:
+                # A face that is not there must not stop the brain from
+                # correctly ignoring something.
+                pass
             self.cogiti.trace.decided(self, turn, decision)
             turn.to(State.IDLE)
             return None

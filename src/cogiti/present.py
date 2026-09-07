@@ -48,6 +48,21 @@ class Presenter:
     def expression(self, name, weight=0.8, fade_ms=250):
         self.a.send(op="expression", name=name, weight=weight, fade_ms=fade_ms)
 
+    def not_for_me(self):
+        """Something was heard and deliberately not acted on.
+
+        The attention window drops what nothing addressed to the device, and
+        that is the feature working. Dropped in silence it is indistinguishable
+        from broken: measured on a device, the same question was asked three
+        times, appeared on the screen three times, and nothing moved — until a
+        greeting happened to open the window and the fourth one answered.
+
+        A gesture and not a sentence. Speaking over a room that was not talking
+        to the device is exactly the interruption the window exists to prevent,
+        so the device says no the way a person across a table would.
+        """
+        self.a.send(op="gesture", name="shake")
+
     def idle(self):
         self.a.send(op="idle")
 

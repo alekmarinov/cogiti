@@ -38,11 +38,12 @@ class FakeTrace:
 
 
 class FakeOutput:
-    def __init__(self): self.said = []
+    def __init__(self): self.said = []; self.shakes = 0
     async def say(self, result):
         text = (result or {}).get("say", "")
         self.said.append(text)
         return text
+    def not_for_me(self): self.shakes += 1
 
 
 class FakeCogiti:
@@ -300,6 +301,30 @@ class TestBeingAddressed(Base):
         await s.utterance("you don't win it now")
         self.assertEqual(c.escalated, [], "it answered somebody else")
         self.assertEqual(c.output.said, [])
+
+    async def test_ignoring_is_visible(self):
+        """Silence is indistinguishable from a broken device, and was: the
+        same question went up on the screen three times with the face still,
+        until a greeting opened the window and the fourth one answered. It
+        shakes its head instead — a gesture, because speaking over a room that
+        was not talking to it is the interruption the window prevents."""
+        c, s = self.listening({"you don't win it now": None})
+        await s.utterance("you don't win it now")
+        self.assertEqual(c.output.said, [], "it spoke over the room")
+        self.assertEqual(c.output.shakes, 1, "it ignored the room invisibly")
+
+    async def test_a_face_that_is_not_there_does_not_stop_it(self):
+        """ports.md allows a deployment with no presentation adapter. Being
+        unable to shake must not turn correctly ignoring something into an
+        error that reaches the person."""
+        c, s = self.listening({"you don't win it now": None})
+        class Broken:
+            said = []
+            def not_for_me(self): raise OSError("no face")
+            async def say(self, result): return ""
+        c.output = Broken()
+        await s.utterance("you don't win it now")
+        self.assertEqual(c.escalated, [])
 
     async def test_a_greeting_opens_the_window(self):
         """Saying hello to something is addressing it, and the reply is both
