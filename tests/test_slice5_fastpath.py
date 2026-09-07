@@ -328,14 +328,30 @@ class TestBeingAddressed(Base):
         self.assertTrue(s.attending(), "answering it did not open the window")
 
     async def test_a_near_miss_still_needs_addressing(self):
-        """The similar tier is where a room's conversation lands. Only an
-        exact phrase the device was taught gets through unaddressed."""
+        """What a room's conversation actually does is fail to resolve. It
+        reaches no intent, so no verdict of `handle`, and nothing runs."""
         c, s = self.listening(
             {"i want that clock gone": FakeDecision("remove_service",
-                                                    tier="similar")},
+                                                    tier="similar",
+                                                    verdict="escalate")},
             {"remove_service": command("remove_service", speak="Gone.")})
         await s.utterance("i want that clock gone")
         self.assertEqual(c.ran, [], "a near miss acted unaddressed")
+
+    async def test_the_tier_is_not_the_gate(self):
+        """Measured on the device: "what's your ip" is `get_ip`, confidence
+        1.00, verdict `handle` — and tier `similar`, because the normaliser
+        folded "what's" before the exemplar matched. "what time is it" is
+        `pattern`. Gating on the tier answered one and silently dropped the
+        other, which from outside is a device that works for some questions
+        and ignores others for no visible reason."""
+        c, s = self.listening(
+            {"what's your ip": FakeDecision("get_ip", tier="similar")},
+            {"get_ip": command("get_ip", speak="192.168.1.174.")})
+        await s.utterance("what's your ip")
+        self.assertIn("get_ip", [i for i, _ in c.ran],
+                      "a confident handle was dropped for its tier")
+        self.assertTrue(s.attending())
 
     async def test_a_confirm_never_gets_through_unaddressed(self):
         """It would have the device asking a question of a room that was not

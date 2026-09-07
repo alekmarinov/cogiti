@@ -800,11 +800,12 @@ class Session:
             self.attend()
             return True
 
-        # **Not addressed, but unmistakable.** A pattern-tier match is an
-        # exact phrase the device was taught, and nobody says "what time is
-        # it" to another person and expects nothing to happen. Requiring a
-        # greeting before every cold request is the bargain a smart speaker
-        # makes and it is a poor one: the common case becomes two sentences.
+        # **Not addressed, but unmistakable.** A `handle` is a phrase the
+        # device was taught and recognised past its own confidence threshold,
+        # and nobody says "what time is it" to another person and expects
+        # nothing to happen. Requiring a greeting before every cold request is
+        # the bargain a smart speaker makes and it is a poor one: the common
+        # case becomes two sentences.
         #
         # This is also where the cost actually is. Ambient speech does not
         # resolve — "you don't win it now" and "personal cost in 8 terabytes
@@ -814,8 +815,19 @@ class Session:
         #
         # `handle` only. A `confirm` reached this way would have the device
         # asking a question of a room that was not talking to it.
-        if (getattr(decision, "tier", None) == "pattern"
-                and getattr(decision, "verdict", None) == "handle"):
+        #
+        # **Not the tier.** This tested `tier == "pattern"` as well, which
+        # sounds like the same sentence and is not. The tier says *how* the
+        # blob matched, not how sure it is — an exemplar hit literally, or the
+        # same exemplar reached through the normaliser. On a real device that
+        # produced a split nobody could have predicted from the outside: "what
+        # time is it" answered and "what's your ip" did not, both `get_ip` and
+        # `get_time` at confidence 1.00 and both `handle`. The person sees the
+        # transcript go up and the device sit there, with nothing on its face
+        # to say why. The verdict is reflexi's judgement about certainty and
+        # is the whole of what belongs here; the tier is an implementation
+        # detail of the matcher leaking through a policy.
+        if getattr(decision, "verdict", None) == "handle":
             self.attend()
             return True
         return False
