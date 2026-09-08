@@ -76,6 +76,36 @@ def hostname(**_args):
 
 
 @provider("device.disk")
+
+@provider("device.version")
+def version(**_args):
+    """What software this appliance is running.
+
+    Asked and not answered on a real device: with no command for it the
+    question escalated, the model reached for the update tooling that had just
+    been added, and it replied "I don't have a version number to report" while
+    /etc/os-release said 0.18.0. Everything below was already on disk and
+    already being read by `hostname` two functions up — it had simply never
+    been offered as an answer.
+
+    The build id matters as much as the version: two images can claim the same
+    version and differ, which is the failure `release.sh --check` exists to
+    prevent one level up, and the build id is what tells them apart.
+    """
+    out = {}
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                k, _, v = line.partition("=")
+                if k in ("VERSION_ID", "BUILD_ID", "ABI_ID", "CHANNEL",
+                         "PRETTY_NAME"):
+                    out[k.lower()] = v.strip().strip('"')
+    except OSError:
+        pass
+    out.setdefault("version_id", "unknown")
+    out.setdefault("build_id", "unknown")
+    return Result(values=out, ttl_s=3600, source="/etc/os-release")
+
 def disk(path="/", **_args):
     try:
         usage = shutil.disk_usage(path)
