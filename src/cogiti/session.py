@@ -233,12 +233,11 @@ class Session:
             # interruption this is avoiding — and it is `not_for_me` rather
             # than a shake here, because which motion says it belongs to the
             # face (architecture.md §2).
-            try:
-                self.cogiti.output.not_for_me()
-            except Exception:
-                # A face that is not there must not stop the brain from
-                # correctly ignoring something.
-                pass
+            # Every output answers this; TextOutput does nothing with it. It
+            # was guarded by a bare `except Exception: pass`, and the guard
+            # was hiding an AttributeError rather than a missing face — so
+            # the shake never once fired on a real device.
+            self.cogiti.output.not_for_me()
             self.cogiti.trace.decided(self, turn, decision)
             turn.to(State.IDLE)
             return None

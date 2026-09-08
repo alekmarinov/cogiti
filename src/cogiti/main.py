@@ -43,6 +43,13 @@ class TextOutput:
     'no way to reach the user' stays a startup failure rather than a surprise.
     """
 
+    # The face half of the output port. A terminal has no eyes to open and
+    # nothing to shake, and saying so with a method that does nothing is the
+    # honest shape: a caller can use the port without asking which
+    # implementation it got.
+    def awake(self, on):  pass
+    def not_for_me(self): pass
+
     async def say_aloud(self, text):
         """One sentence of an answer still being written."""
         if text:
@@ -96,6 +103,19 @@ class FaceOutput:
         # adapter's own `barge_in` and lifts by itself the moment an adapter
         # can cancel — nothing here needs changing when libspeexdsp arrives.
         self.half_duplex = False
+
+    # Delegated, rather than left for callers to reach through `.p`.
+    # FaceOutput *is* the output port; the presenter is one thing behind it,
+    # and a caller made to know the difference will get it wrong. It did:
+    # both of these were called as `output.<method>()`, FaceOutput had
+    # neither, and the AttributeError went into a bare `except Exception:
+    # pass` at each call site. The shake never fired on a device and neither
+    # did the wake.
+    def awake(self, on):
+        self.p.awake(on)
+
+    def not_for_me(self):
+        self.p.not_for_me()
 
     async def say(self, result):
         if result is None:
@@ -1118,13 +1138,10 @@ def main(argv=None):
             # worth opening its eyes for: not "the machine booted", which it
             # cannot help with, but "there is something here that will
             # answer you now".
-            try:
-                c.output.awake(True)
-            except Exception:
-                # ports.md allows a deployment with no presentation adapter,
-                # and a brain that refuses to start because it has no face to
-                # wake would be a worse failure than a face left shut.
-                pass
+            # Not inside a bare except any more. `output` is one of the two
+            # classes above and both answer this, so a failure here is a real
+            # one — and hiding it is exactly how the wake went missing.
+            c.output.awake(True)
             print("cogiti — listening", flush=True)
             loop.run_forever()          # until a signal stops it
     finally:

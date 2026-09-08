@@ -302,6 +302,23 @@ class TestBeingAddressed(Base):
         self.assertEqual(c.escalated, [], "it answered somebody else")
         self.assertEqual(c.output.said, [])
 
+    def test_every_output_answers_the_whole_port(self):
+        """The fake is not the contract; the real classes are.
+
+        `not_for_me` and `awake` were called as `output.<method>()`, only the
+        presenter *behind* FaceOutput had them, and both call sites sat inside
+        a bare `except Exception: pass`. The suite was green the whole time
+        because FakeOutput below defines what the real classes did not, so the
+        shake never fired on a device and neither did the wake — and nothing
+        said so. This asserts against the classes that actually ship."""
+        from cogiti import main as main_mod
+        for cls in (main_mod.TextOutput, main_mod.FaceOutput):
+            for name in ("say", "awake", "not_for_me"):
+                self.assertTrue(
+                    callable(getattr(cls, name, None)),
+                    "%s cannot answer %s(), which something calls on it"
+                    % (cls.__name__, name))
+
     async def test_ignoring_is_visible(self):
         """Silence is indistinguishable from a broken device, and was: the
         same question went up on the screen three times with the face still,
@@ -314,17 +331,17 @@ class TestBeingAddressed(Base):
         self.assertEqual(c.output.shakes, 1, "it ignored the room invisibly")
 
     async def test_a_face_that_is_not_there_does_not_stop_it(self):
-        """ports.md allows a deployment with no presentation adapter. Being
-        unable to shake must not turn correctly ignoring something into an
-        error that reaches the person."""
+        """ports.md allows a deployment with no presentation adapter, and
+        `output = text` is how that is configured. It is the real class rather
+        than a stub that raises: this test used to assert that a throwing
+        output was survived, which described the bare `except` around the call
+        instead of describing the deployment, and that except was hiding a
+        genuine AttributeError the whole time."""
+        from cogiti import main as main_mod
         c, s = self.listening({"you don't win it now": None})
-        class Broken:
-            said = []
-            def not_for_me(self): raise OSError("no face")
-            async def say(self, result): return ""
-        c.output = Broken()
+        c.output = main_mod.TextOutput()
         await s.utterance("you don't win it now")
-        self.assertEqual(c.escalated, [])
+        self.assertEqual(c.escalated, [], "it answered somebody else")
 
     async def test_a_greeting_opens_the_window(self):
         """Saying hello to something is addressing it, and the reply is both
