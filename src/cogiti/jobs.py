@@ -22,6 +22,12 @@ LIMITS = {
     "concurrent_agent_jobs": 2,
     "concurrent_tool_jobs_per_agent": 4,
     "concurrent_jobs_total": 4,
+    # One. A `run` job is a command line on the appliance itself, and the one
+    # this exists for — a package upgrade — has no lock of its own: two at
+    # once interleave over the same files and the loser rebuilds its index
+    # from a half-finished database. This cap is the only serialization there
+    # is, and it does not extend to somebody at an ssh prompt.
+    "concurrent_run_jobs": 1,
 }
 
 TERM_GRACE_S = 5.0      # SIGTERM, then this long, then SIGKILL
@@ -85,6 +91,11 @@ def _check_caps(db, kind, parent_job):
         n = _db.count_live(db, kind="agent")
         if n >= LIMITS["concurrent_agent_jobs"]:
             raise Backpressure("%d agent jobs already running" % n)
+
+    if kind == "run":
+        n = _db.count_live(db, kind="run")
+        if n >= LIMITS["concurrent_run_jobs"]:
+            raise Backpressure("something is already running")
 
     if kind == "tool" and parent_job:
         n = _db.count_live(db, kind="tool", parent_job=parent_job)

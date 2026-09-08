@@ -53,7 +53,7 @@ class TableError(Exception):
 class Command:
     __slots__ = ("intent", "provider", "job", "announce", "speak", "present",
                  "confirm", "timeout_ms", "offline", "args", "command", "source",
-                 "linger")
+                 "linger", "argv", "notice", "every_s")
 
     #: Job kinds an intent may start. A job is what a command becomes when it
     #: outlives its turn — see the last section of `docs/command-table.md`,
@@ -75,7 +75,14 @@ class Command:
             "pin_thing",
             # Both need the session or the pending list, neither of which a
             # provider in a worker thread can see.
-            "repeat", "stop")
+            "repeat", "stop",
+            # A command line that takes longer than a turn. The argv lives in
+            # the table, never here: a provider caps at `timeout_ms` (250 ms by
+            # default) and `shell` at five seconds, which docs/command-table.md
+            # is explicit is the boundary at which something becomes a job.
+            # What it runs is the deployment's business — cogiti knows only
+            # that it is a program with an exit status and some output.
+            "run")
 
     def __init__(self, intent, spec):
         self.intent = intent
@@ -97,6 +104,45 @@ class Command:
         self.announce = spec.get("announce")
         if self.announce and not self.job:
             raise TableError("[%s] has `announce` but is not a job" % intent)
+
+        # What a `run` job runs. A list, so it is exec'd rather than passed to
+        # a shell — a table is data an operator edits, and data that becomes a
+        # shell string is data that becomes an injection.
+        self.argv = spec.get("argv")
+        if self.argv is not None:
+            if self.job != "run":
+                raise TableError("[%s] has `argv` but is not a `run` job"
+                                 % intent)
+            if not isinstance(self.argv, list) or not self.argv or \
+                    not all(isinstance(a, str) for a in self.argv):
+                raise TableError("[%s] `argv` must be a non-empty list of "
+                                 "strings" % intent)
+        elif self.job == "run":
+            raise TableError("[%s] is a `run` job and needs `argv`" % intent)
+
+        # Shown, never spoken, and only when the job produced output. The
+        # difference from `announce` is the whole point: an announcement
+        # interrupts whatever is happening, and something the device merely
+        # noticed has not earned that. See Cogiti.notice.
+        self.notice = spec.get("notice")
+        if self.notice and not self.job:
+            raise TableError("[%s] has `notice` but is not a job" % intent)
+
+        # Run this every N seconds, unprompted, from startup. A duty rather
+        # than a request: nobody says it, and its result is a notice on the
+        # screen rather than an answer to anybody.
+        self.every_s = spec.get("every_s")
+        if self.every_s is not None:
+            if self.job != "run":
+                raise TableError("[%s] has `every_s` but is not a `run` job"
+                                 % intent)
+            self.every_s = int(self.every_s)
+            # A floor, because each tick is a process and may be a network
+            # round trip. Ten seconds is the same floor the service SDK's
+            # ticker uses, and for the same reason.
+            if self.every_s < 10:
+                raise TableError("[%s] `every_s` is %d; ten seconds is the "
+                                 "floor" % (intent, self.every_s))
         self.speak = spec.get("speak", "")
         self.present = spec.get("present", "none")
         # How long the answer stays on screen after it has been spoken, in

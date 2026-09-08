@@ -49,6 +49,8 @@ class TextOutput:
     # implementation it got.
     def awake(self, on):  pass
     def not_for_me(self): pass
+    def notice(self, text):
+        print("  [notice: %s]" % text, flush=True)
 
     async def say_aloud(self, text):
         """One sentence of an answer still being written."""
@@ -116,6 +118,9 @@ class FaceOutput:
 
     def not_for_me(self):
         self.p.not_for_me()
+
+    def notice(self, text):
+        self.p.notice(text)
 
     async def say(self, result):
         if result is None:
@@ -436,6 +441,8 @@ class Cogiti:
             if cmd.job in ("pin_thing", "repeat", "stop"):
                 return await handler(cmd, decision, session_id, turn=turn)
             return await handler(cmd, decision, session_id)
+        if cmd.job == "run":
+            return await self.run_job(cmd, args, session_id)
         if cmd.job == "timer":
             seconds = int(args.get("duration") or 0)
             if seconds <= 0:
@@ -452,6 +459,105 @@ class Cogiti:
                     "did": ["started %s" % title]}
         return {"type": "failed", "kind": "table",
                 "message": "no runner for job kind %r" % cmd.job}
+
+    async def run_job(self, cmd, args, session_id, quiet=False):
+        """A command line that outlives its turn.
+
+        Started, never awaited — architecture.md §1, cogiti never blocks. The
+        turn says what it started and ends; the announcement comes when it
+        comes, which for a software upgrade is minutes later.
+
+        What it runs is not cogiti's business. The argv comes from the table,
+        which is where a deployment says what its machine is; naming a package
+        manager here would put this file in the wrong repository.
+        """
+        argv = [table.render(a, args) for a in cmd.argv]
+        title = cmd.speak and table.render(cmd.speak, args) or cmd.intent
+        try:
+            job_id, proc = jobs.spawn(self.db, "run", title, session_id, argv)
+        except jobs.Backpressure as e:
+            # The cap is doing its job. lpkg has no lock of its own, so two
+            # upgrades at once would interleave over the same files with only
+            # this between them.
+            return {"type": "failed", "kind": "busy", "message": str(e)}
+
+        async def wait():
+            out, err = await asyncio.to_thread(proc.communicate)
+            row = _db.get_job(self.db, job_id)
+            if row is None or row["state"] != "running":
+                return                       # cancelled while it ran
+            ok = proc.returncode == 0
+            _db.set_state(self.db, job_id, "done" if ok else "failed")
+            text = (out or "").strip()
+            values = dict(args, output=text,
+                          lines=str(len([l for l in text.splitlines() if l])),
+                          error=(err or "").strip())
+            if not ok:
+                # Never silently: a failed upgrade that says nothing is
+                # indistinguishable from one that never ran.
+                self.output.notice("%s failed" % title)
+                return
+            if cmd.notice is not None:
+                # Only when it found something. A duty that reports "nothing
+                # to tell you" every hour is a duty people cover with tape.
+                if text:
+                    await self.notice(cmd, values)
+            elif not quiet:
+                await self.announce(cmd, values)
+
+        asyncio.ensure_future(wait())
+        return {"type": "result",
+                "say": table.render(cmd.speak, args) if cmd.speak else "",
+                "did": ["started %s" % title]}
+
+    async def notice(self, cmd, values):
+        """Put something on the screen that nobody asked for.
+
+        The quiet sibling of `announce`. Same trigger, same templates, and it
+        does not speak — see Presenter.notice for why that distinction is the
+        whole feature rather than a detail of it.
+        """
+        text = table.render(cmd.notice or "", values)
+        if text.strip():
+            self.output.notice(text)
+
+    async def run_duties(self):
+        """Commands the table marks `every_s`, run forever, unprompted.
+
+        Shaped after `Services.run_sampler`, which is the only other thing in
+        this process that wants a heartbeat — an asyncio loop rather than a
+        repeating timer, because a timer is a real `sleep` process and a job
+        row, and a duty that ticks hourly for a year should leave neither
+        behind.
+
+        One failure never stops the loop: a check that cannot reach the
+        network is the ordinary case on an appliance, not an error worth
+        losing the duty over.
+        """
+        duties = [c for c in self.table.commands.values()
+                  if getattr(c, "every_s", None)]
+        if not duties:
+            return
+        # A stagger, so a device that has several does not do them all in the
+        # same second every time — and a first tick soon after boot rather
+        # than a whole interval later, because the interesting news is usually
+        # waiting when it starts.
+        for n, cmd in enumerate(duties):
+            asyncio.ensure_future(self._duty(cmd, delay=15 + n * 5))
+
+    async def _duty(self, cmd, delay):
+        await asyncio.sleep(delay)
+        while True:
+            try:
+                # A duty belongs to no conversation, but the job table
+                # requires a session and is right to: an untraceable job is
+                # one nobody can ask about. `duty` is the session that never
+                # spoke.
+                await self.run_job(cmd, {}, session_id="duty", quiet=True)
+            except Exception as e:                            # noqa: BLE001
+                print("duty %s failed: %s" % (cmd.intent, e),
+                      file=sys.stderr, flush=True)
+            await asyncio.sleep(cmd.every_s)
 
     async def cancel_job(self, cmd, _decision, _session_id):
         """"Stop the timer." Selection is contextual, and ambiguity is a
@@ -1142,6 +1248,10 @@ def main(argv=None):
             # classes above and both answer this, so a failure here is a real
             # one — and hiding it is exactly how the wake went missing.
             c.output.awake(True)
+            # Standing duties, once there is something to notice them for.
+            # After the wake and before the loop: a duty that reports on an
+            # appliance nobody has finished starting is reporting on nothing.
+            loop.run_until_complete(c.run_duties())
             print("cogiti — listening", flush=True)
             loop.run_forever()          # until a signal stops it
     finally:

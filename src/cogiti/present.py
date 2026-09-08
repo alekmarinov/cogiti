@@ -64,6 +64,22 @@ class Presenter:
         """
         self.a.send(op="awake", state=bool(on))
 
+    def notice(self, text):
+        """Something the device noticed, put where it can be ignored.
+
+        Pinned to the periphery, which already means "conversation never
+        shoves it aside" — so it survives the answers that come and go beneath
+        it and stays until it is replaced or taken down.
+
+        Not spoken, and that is the point. `announce` talks over whatever is
+        happening and says so in its own docstring; a device that interrupts
+        to report something it merely observed is a device people stop leaving
+        switched on. Anything worth saying out loud is worth a turn.
+        """
+        self.a.send(op="create", id="notice", kind="text", text=text,
+                    style="caption", region=PERIPHERY, lifetime=PINNED,
+                    attention="never")
+
     def not_for_me(self):
         """Something was heard and deliberately not acted on.
 
