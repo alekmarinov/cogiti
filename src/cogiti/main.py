@@ -1114,6 +1114,17 @@ def main(argv=None):
         if sys.stdin.isatty() or not cfg["speech_in_adapter"]:
             loop.run_until_complete(repl(c))
         else:
+            # The face has been asleep since rcS. This is the moment it is
+            # worth opening its eyes for: not "the machine booted", which it
+            # cannot help with, but "there is something here that will
+            # answer you now".
+            try:
+                c.output.awake(True)
+            except Exception:
+                # ports.md allows a deployment with no presentation adapter,
+                # and a brain that refuses to start because it has no face to
+                # wake would be a worse failure than a face left shut.
+                pass
             print("cogiti — listening", flush=True)
             loop.run_forever()          # until a signal stops it
     finally:

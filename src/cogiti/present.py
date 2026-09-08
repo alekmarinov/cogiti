@@ -48,6 +48,22 @@ class Presenter:
     def expression(self, name, weight=0.8, fade_ms=250):
         self.a.send(op="expression", name=name, weight=weight, fade_ms=fade_ms)
 
+    def awake(self, on):
+        """Open the face's eyes, or close them.
+
+        The renderer starts long before this does — on the appliance, from
+        rcS, while the brain is still four init scripts away — so it boots
+        with `--asleep` and stares at nothing until told. Waking is therefore
+        the brain's first act rather than part of its configuration.
+
+        **Woken when cogiti is listening, not when the network is up.** Then
+        closed eyes means exactly one thing, "there is no brain", which is a
+        diagnosis readable from across the room. If waking also waited on a
+        DHCP lease, a sleeping face could mean the brain is fine and the
+        network is slow, and the signal would be worth nothing.
+        """
+        self.a.send(op="awake", state=bool(on))
+
     def not_for_me(self):
         """Something was heard and deliberately not acted on.
 
