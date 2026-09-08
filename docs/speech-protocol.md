@@ -61,6 +61,35 @@ startup naming anything missing.
 
 ## 3. adapter → cogiti
 
+### `ready`
+
+Sent once, when the adapter can actually hear.
+
+```json
+{"v": 1, "type": "ready"}
+```
+
+No fields. It means the capture device is open and the streaming recogniser is
+loaded — everything needed to turn the next sound into a `partial`.
+
+**Why this exists.** Nothing else in this protocol distinguishes "spawned"
+from "listening", and the difference is seconds: cogiti starts the adapter,
+`start()` returns as soon as the process exists, and audi then loads a
+streaming model. Measured on the appliance, avatari opened the face's eyes at
+13:18:34 and the adapter was not even spawned until 13:18:37. The person said
+hello to a device that was not yet listening, three times, and the face looked
+attentive throughout.
+
+So this is what the boot waits for before the face opens its eyes. It is the
+only event in this protocol that is about the adapter rather than about
+somebody speaking, which is why cogiti exposes it as an `asyncio.Event` rather
+than a callback.
+
+**An adapter that never sends it still works.** cogiti waits a bounded time
+and then proceeds — eyes that never open would be a worse failure than eyes
+that open early, and an older adapter must not brick the face. Sending it late
+is fine; sending it more than once is harmless.
+
 ### `speech_start`
 
 Someone began speaking. **No words, and that is the point** — it must arrive in

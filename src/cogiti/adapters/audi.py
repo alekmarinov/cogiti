@@ -35,6 +35,10 @@ class Speech:
         on_final(text, ms)
         on_speech_end()
         on_error(kind, message)
+
+    And one event that is not a callback: `ready`, which is an asyncio.Event
+    rather than a call because the thing that waits for it is not handling an
+    utterance — it is the boot, deciding when the face may open its eyes.
     """
 
     def __init__(self, argv, on_warn=None, **callbacks):
@@ -44,6 +48,10 @@ class Speech:
         self._warn = on_warn or (lambda m: None)
         self.proc = None
         self._reader = None
+        # Set when the adapter says it can hear. Never cleared on a
+        # restart: the ears having worked once is what the face was
+        # waiting for, and a mid-life respawn is not a second boot.
+        self.ready = asyncio.Event()
         self._stopping = False
         self._backoff = RESTART_MIN_S
         self._speaking = None            # id of the utterance being played
@@ -139,7 +147,11 @@ class Speech:
 
     async def _dispatch(self, msg):
         kind = msg.get("type")
-        if kind == "speech_start":
+        if kind == "ready":
+            # The ears work now — not "the adapter was spawned", which is all
+            # `start()` returning ever meant. See speech-protocol.md.
+            self.ready.set()
+        elif kind == "speech_start":
             # The adapter has already stopped its own audio — protocol §5. All
             # that is left for us is the face and the turn.
             self._speaking = None

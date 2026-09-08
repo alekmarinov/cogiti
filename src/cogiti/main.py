@@ -521,6 +521,31 @@ class Cogiti:
         if text.strip():
             self.output.notice(text)
 
+    async def wait_for_ears(self, timeout_s=25.0):
+        """Block until the speech adapter says it can hear, or give up.
+
+        `speech_in.start()` returning has never meant the device can hear: it
+        means the adapter was *spawned*. On the appliance audi then loads a
+        streaming recogniser, and the gap was measured at several seconds —
+        during which the face had already opened its eyes and the person said
+        hello to something that was not listening yet.
+
+        The timeout is not a fallback to be proud of, it is a refusal to make
+        the face worse than it was. An adapter that never sends `ready` — an
+        older audi, or one whose microphone never opens — would otherwise
+        leave a device asleep for ever, and eyes that never open is a harder
+        failure to diagnose than eyes that open early.
+        """
+        if self.speech_in is None:
+            return True                  # no ears to wait for; `output = text`
+        try:
+            await asyncio.wait_for(self.speech_in.ready.wait(), timeout_s)
+            return True
+        except asyncio.TimeoutError:
+            print("speech adapter never said it was ready; opening the eyes "
+                  "anyway after %.0fs" % timeout_s, file=sys.stderr, flush=True)
+            return False
+
     async def run_duties(self):
         """Commands the table marks `every_s`, run forever, unprompted.
 
@@ -1247,6 +1272,10 @@ def main(argv=None):
             # Not inside a bare except any more. `output` is one of the two
             # classes above and both answer this, so a failure here is a real
             # one — and hiding it is exactly how the wake went missing.
+            # Only once the ears work. The face saying "ready" while the
+            # recogniser is still loading is a promise the device cannot keep,
+            # and the person finds out by saying hello twice.
+            loop.run_until_complete(c.wait_for_ears())
             c.output.awake(True)
             # Standing duties, once there is something to notice them for.
             # After the wake and before the loop: a duty that reports on an
