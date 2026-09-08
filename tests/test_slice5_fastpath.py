@@ -395,15 +395,35 @@ class TestBeingAddressed(Base):
                       "a confident handle was dropped for its tier")
         self.assertTrue(s.attending())
 
-    async def test_a_confirm_never_gets_through_unaddressed(self):
+    async def test_a_confirm_on_a_score_never_gets_through_unaddressed(self):
         """It would have the device asking a question of a room that was not
-        talking to it."""
+        talking to it, and a score is exactly what cannot tell the two
+        apart."""
+        c, s = self.listening(
+            {"i want that clock gone": FakeDecision("remove_service",
+                                                    tier="similar",
+                                                    verdict="confirm")},
+            {"remove_service": command("remove_service", speak="Gone.")})
+        await s.utterance("i want that clock gone")
+        self.assertEqual(c.ran, [], "a scored confirm asked an unaddressed room")
+        self.assertEqual(c.output.shakes, 1, "and it did so invisibly")
+
+    async def test_a_certain_confirm_is_asked_even_unaddressed(self):
+        """A pattern match is the deterministic pre-matcher, not a score.
+        Nobody says "power off" to another person and expects nothing.
+
+        Measured on a device before this: "software update" resolved `update`,
+        confirm, pattern, 1.00 — and the face shook its head, because no
+        confirm could pass this gate at all. It still only ever *asks*;
+        nothing acts without an explicit yes."""
         c, s = self.listening(
             {"power off": FakeDecision("power_off", tier="pattern",
                                        verdict="confirm")},
             {"power_off": command("power_off", speak="Bye.")})
         await s.utterance("power off")
-        self.assertEqual(c.ran, [])
+        self.assertEqual(c.output.shakes, 0, "it refused a phrase it was taught")
+        self.assertEqual(c.ran, [], "asked is not done — nothing may run "
+                                    "without an explicit yes")
 
     async def test_its_own_name_opens_it_too(self):
         c, s = self.listening({"inteliboy": FakeDecision("wake")})
@@ -476,6 +496,41 @@ class TestAWeakMatchMidConversation(Base):
         await s.utterance("show me the results")
         self.assertEqual(c.escalated, ["show me the results"])
         self.assertEqual(c.ran, [], "it acted on a 54% guess")
+
+    async def test_a_certain_match_is_not_a_weak_one(self):
+        """The rule above is about drift, and a pattern match is not drift.
+
+        On a device: "software update" resolved `update`, confirm, pattern,
+        1.00 — and was escalated anyway because it happened mid-conversation.
+        The model asked "Shall I install the available updates?", the turn
+        ended, and the yes arrived in the next utterance with nothing waiting
+        for it. The device answered "I asked, and you didn't say yes, so I
+        held off" to somebody who had said yes four times.
+
+        Asked on the fast path, the turn stays alive and `heard` routes the
+        next utterance to `answer` before anything else looks at it."""
+        certain = FakeDecision("update", verdict="confirm", tier="pattern")
+        c, s = self.session({"software update": certain},
+                            {"update": command("update", speak="Updating.",
+                                               confirm="Shall I install the "
+                                                       "available updates?")})
+        s._last_turn_ns = __import__("time").monotonic_ns()   # just spoke
+        task = asyncio.ensure_future(s.utterance("software update"))
+        for _ in range(200):
+            if s.awaiting_answer():
+                break
+            await asyncio.sleep(0.005)
+        self.assertTrue(s.awaiting_answer(),
+                        "the question did not outlive the turn that asked it")
+        # Through `heard`, not `answer`: the point is that the next thing said
+        # reaches the question before anything else looks at it, whatever else
+        # it might have resolved to on its own.
+        await s.heard("yes, update")
+        await task
+        self.assertEqual(c.escalated, [],
+                         "it handed an exact taught phrase to the model")
+        self.assertEqual([i for i, _ in c.ran], ["update"],
+                         "the yes did not reach the question")
 
     async def test_out_of_the_window_it_still_asks(self):
         """Nothing is going on, so the resolver's guess is the best thing

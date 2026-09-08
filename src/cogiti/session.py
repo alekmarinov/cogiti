@@ -629,7 +629,8 @@ class Session:
                   % (decision.intent_id, self.mid_conversation(), gap,
                      len(getattr(self.cogiti.pending, "running", {}) or {})),
                   file=sys.stderr, flush=True)
-        if decision.verdict == "confirm" and self.mid_conversation():
+        if (decision.verdict == "confirm" and self.mid_conversation()
+                and getattr(decision, "tier", None) != "pattern"):
             # **Unsure, mid-conversation: ask the party that has the
             # conversation.**
             #
@@ -652,6 +653,26 @@ class Session:
             # anything carrying a `confirm` still asks, in the table's own
             # words. The question is not skipped — it is asked by whoever can
             # see what the conversation is about.
+            #
+            # **Except a pattern-tier match, which is not drift.**
+            #
+            # The measured case above scored 0.539 on the `similar` tier —
+            # a sentence that wandered into the confirm band. A pattern match
+            # is the deterministic pre-matcher: an exact phrase the device was
+            # taught, at 1.00, with no score involved. Handing that to the
+            # model costs the thing this whole path exists to protect.
+            #
+            # It cost it on a device: "software update" resolved `update`,
+            # confirm, pattern, 1.00 — and was escalated anyway. The model
+            # asked "Shall I install the available updates?", the turn ended,
+            # and the answer arrived in the next utterance with nothing left
+            # waiting for it. The device replied "I asked, and you didn't say
+            # yes, so I held off." to somebody who had said yes four times.
+            #
+            # Asked on the fast path instead, the turn stays alive and
+            # `heard` routes the next utterance to `answer` before anything
+            # else looks at it — which is what makes a question a question
+            # rather than a sentence the device happened to say.
             return None
 
         if decision.verdict == "confirm":
@@ -832,8 +853,24 @@ class Session:
         # every model call, which is the thing that was being spent on other
         # people's conversations.
         #
-        # `handle` only. A `confirm` reached this way would have the device
-        # asking a question of a room that was not talking to it.
+        # `handle`, or a `confirm` the pre-matcher is certain of.
+        #
+        # A confirm on a *score* is still refused here: that would have the
+        # device asking a question of a room that was not talking to it, and
+        # the score is exactly what cannot tell the two apart. A pattern-tier
+        # match is not a score. It is an exact phrase the device was taught,
+        # and nobody says "software update" or "power off" to another person
+        # and expects nothing to happen.
+        #
+        # Refusing it cost a real conversation: "software update" resolved
+        # `update`, confirm, pattern, 1.00 — and the face shook its head,
+        # because a confirm could not get through this gate at all. The
+        # answer is the same as for `handle`, for the same reason: the tier
+        # says how it matched, the verdict says what to do about it, and only
+        # one of those belongs in a policy about whether it was addressed.
+        #
+        # It still only ever *asks*. Nothing here can act without an explicit
+        # yes, and cogiti never answers one on anybody's behalf.
         #
         # **Not the tier.** This tested `tier == "pattern"` as well, which
         # sounds like the same sentence and is not. The tier says *how* the
@@ -846,7 +883,9 @@ class Session:
         # to say why. The verdict is reflexi's judgement about certainty and
         # is the whole of what belongs here; the tier is an implementation
         # detail of the matcher leaking through a policy.
-        if getattr(decision, "verdict", None) == "handle":
+        verdict = getattr(decision, "verdict", None)
+        if verdict == "handle" or (verdict == "confirm"
+                                   and getattr(decision, "tier", None) == "pattern"):
             self.attend()
             return True
         return False
