@@ -497,13 +497,18 @@ class Cogiti:
                 # indistinguishable from one that never ran.
                 self.output.notice("%s failed" % title)
                 return
-            if cmd.notice is not None:
+            # Both, if the table asks for both. A job may speak, or show, or
+            # do each with different words — which is what an upgrade wants:
+            # "four packages updated" is a sentence, and "cogiti 0.37.0-1 ->
+            # 0.40.0-1" is not one anybody should have to listen to. The
+            # summary is said and the detail is left on the screen to be read
+            # at leisure.
+            if cmd.announce is not None and not quiet:
+                await self.announce(cmd, values)
+            if cmd.notice is not None and text:
                 # Only when it found something. A duty that reports "nothing
                 # to tell you" every hour is a duty people cover with tape.
-                if text:
-                    await self.notice(cmd, values)
-            elif not quiet:
-                await self.announce(cmd, values)
+                await self.notice(cmd, values)
 
         asyncio.ensure_future(wait())
         return {"type": "result",
