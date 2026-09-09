@@ -15,11 +15,15 @@ from cogiti.turn import State                                            # noqa:
 
 class FakeDecision:
     def __init__(self, intent=None, verdict="handle", tier="pattern",
-                 slots=None, missing=None):
+                 slots=None, missing=None, confidence=1.0):
         self.intent_id, self.verdict, self.tier = intent, verdict, tier
         self.slots = slots or {}
         self.missing_slot = missing
-        self.confidence, self.runner_up_id, self.runner_up = 1.0, None, 0.0
+        # Defaults to certain, because most of these stand in for a resolver
+        # that knew. A test about *not* knowing has to say so: cogiti reads
+        # this number now, and a fake that claims 1.00 while calling itself a
+        # weak match is not modelling anything real.
+        self.confidence, self.runner_up_id, self.runner_up = confidence, None, 0.0
         self.rejected, self.normalized = False, ""
 
 
@@ -402,11 +406,39 @@ class TestBeingAddressed(Base):
         c, s = self.listening(
             {"i want that clock gone": FakeDecision("remove_service",
                                                     tier="similar",
-                                                    verdict="confirm")},
+                                                    verdict="confirm",
+                                                    confidence=0.55)},
             {"remove_service": command("remove_service", speak="Gone.")})
         await s.utterance("i want that clock gone")
         self.assertEqual(c.ran, [], "a scored confirm asked an unaddressed room")
         self.assertEqual(c.output.shakes, 1, "and it did so invisibly")
+
+    async def test_certainty_is_the_score_and_not_the_tier(self):
+        """Reported from a device: "software upgrade" got a head shake.
+
+        It resolves `update` at 0.85 — on the `similar` tier, because only
+        four literal phrasings are patterns. Gating on the tier threw away
+        every other way of saying it, including "install the updates", "run
+        the updates", "apply the updates" and "update the software", each of
+        which resolves at 1.00 and each of which was silently dropped.
+
+        The tier says how the blob matched. The score says how sure it was."""
+        c, s = self.listening(
+            {"software upgrade": FakeDecision("update", tier="similar",
+                                              verdict="confirm",
+                                              confidence=0.85)},
+            {"update": command("update", speak="Updating.",
+                               confirm="Shall I install the updates?")})
+        task = asyncio.ensure_future(s.utterance("software upgrade"))
+        for _ in range(200):
+            if s.awaiting_answer():
+                break
+            await asyncio.sleep(0.005)
+        self.assertEqual(c.output.shakes, 0, "it shook at a 0.85 confirm")
+        self.assertTrue(s.awaiting_answer(), "it never asked")
+        await s.heard("yes")
+        await task
+        self.assertEqual([i for i, _ in c.ran], ["update"])
 
     async def test_a_certain_confirm_is_asked_even_unaddressed(self):
         """A pattern match is the deterministic pre-matcher, not a score.
@@ -487,7 +519,11 @@ class TestAWeakMatchMidConversation(Base):
     """
 
     def weak(self, intent="list_services"):
-        return FakeDecision(intent, verdict="confirm", tier="similar")
+        # 0.539 is the measurement in this class's own docstring, not a round
+        # number chosen to fail: "show me the results with example pictures"
+        # scored exactly that against list_services.
+        return FakeDecision(intent, verdict="confirm", tier="similar",
+                            confidence=0.539)
 
     async def test_it_escalates_instead_of_asking(self):
         c, s = self.session({"show me the results": self.weak()},

@@ -90,6 +90,44 @@ def _debug():
 RELEASING = ("stop",)
 
 
+#: How sure a `confirm` has to be before it is treated as certainly meant,
+#: rather than as the resolver's best guess at a sentence that may not have
+#: been addressed to the device at all.
+#:
+#: 0.80 is reflexi's own bar for a destructive intent — `reboot`, `power_off`
+#: and `update` all carry `threshold: 0.80`, `margin: 0.15` — so anything at or
+#: above it has already cleared the highest bar reflexi sets for itself.
+#:
+#: The measured failure this must keep out scored **0.539**: "show me the
+#: results with example pictures", said after a product recommendation, drifted
+#: into `list_services` inside the confirm band. Nothing near 0.80.
+CERTAIN = 0.80
+
+
+def _certain(decision):
+    """Did the resolver *know*, or was it guessing?
+
+    Twice now this question has been answered with `tier == "pattern"`, and
+    twice that was wrong. The tier says **how** the blob matched — an exemplar
+    hit literally, or the same exemplar reached through the normaliser — and
+    not how sure it is. Measured, with only the four literal patterns getting
+    through: "install the updates", "run the updates", "apply the updates" and
+    "update the software" all resolve `update` at confidence **1.00** on the
+    `similar` tier, and every one of them was being dropped as though the room
+    had merely said something update-shaped.
+
+    So: the pre-matcher, or a score at least as high as reflexi's own
+    destructive bar. Both mean the same thing — this was said to the device,
+    on purpose.
+    """
+    if getattr(decision, "tier", None) == "pattern":
+        return True
+    try:
+        return float(getattr(decision, "confidence", 0.0) or 0.0) >= CERTAIN
+    except (TypeError, ValueError):
+        return False
+
+
 class Session:
     def __init__(self, cogiti, speaker_id=UNKNOWN_SPEAKER, thread="main"):
         self.cogiti = cogiti
@@ -630,7 +668,7 @@ class Session:
                      len(getattr(self.cogiti.pending, "running", {}) or {})),
                   file=sys.stderr, flush=True)
         if (decision.verdict == "confirm" and self.mid_conversation()
-                and getattr(decision, "tier", None) != "pattern"):
+                and not _certain(decision)):
             # **Unsure, mid-conversation: ask the party that has the
             # conversation.**
             #
@@ -884,8 +922,7 @@ class Session:
         # is the whole of what belongs here; the tier is an implementation
         # detail of the matcher leaking through a policy.
         verdict = getattr(decision, "verdict", None)
-        if verdict == "handle" or (verdict == "confirm"
-                                   and getattr(decision, "tier", None) == "pattern"):
+        if verdict == "handle" or (verdict == "confirm" and _certain(decision)):
             self.attend()
             return True
         return False
