@@ -296,8 +296,25 @@ class Presenter:
 
     def _id_for(self, result):
         """Which object this result is about to become, so the one it replaces
-        can go and the one it *is* is not destroyed and recreated."""
+        can go and the one it *is* is not destroyed and recreated.
+
+        **None when it will draw nothing**, and that distinction is the whole
+        of a bug people could see: a result with no `show` — anything the
+        table gives `present = "none"` — claimed the answer id anyway. The
+        sweep then spared an object this result was never going to redraw, and
+        whatever was on the stage before simply stayed.
+
+        Reported from a device as a confirmation that would not go away: the
+        question is drawn as an answer card, `Cancelled.` and `Updating. I'll
+        tell you when it's done.` both present as nothing, so the question sat
+        there after it had been answered — outliving the thing it was asking
+        about.
+        """
+        if result.get("type") == "failed":
+            return ANSWER            # the failure line below is drawn
         show = result.get("show")
+        if not show:
+            return None              # nothing drawn, so nothing spared
         if isinstance(show, dict):
             return show.get("id", ANSWER)
         return ANSWER

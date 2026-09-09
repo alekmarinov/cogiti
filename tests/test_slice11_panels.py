@@ -175,6 +175,48 @@ class TestWhatTheToolTellsTheModel(unittest.TestCase):
         self.assertIn("fallback", d)
 
 
+class TestAnAnswerThatDrawsNothing(unittest.TestCase):
+    """Reported from a device: the confirmation question would not go away.
+
+    A question is drawn as an answer card. `Cancelled.` and `Updating. I'll
+    tell you when it's done.` are both spoken-only — the table gives that
+    command `present = "none"` — so they draw nothing, and the sweep was being
+    told to spare the very id they were never going to redraw. The question
+    outlived the thing it was asking about.
+    """
+
+    def setUp(self):
+        self.a = FakeAdapter()
+        self.p = present.Presenter(self.a)
+
+    def drew(self):
+        return [o for o in self.a.ops if o.get("op") == "create"]
+
+    def destroyed(self):
+        return [o["id"] for o in self.a.ops if o.get("op") == "destroy"]
+
+    def test_a_spoken_only_answer_takes_the_last_card_down(self):
+        self.p.result({"type": "result", "say": "Shall I install the "
+                                                "available updates?",
+                       "show": "Shall I install the available updates?"})
+        self.assertTrue(self.drew(), "the question was never drawn")
+        self.a.ops.clear()
+
+        # The answer to it: spoken, and presenting nothing.
+        self.p.result({"type": "result", "say": "Cancelled."})
+        self.assertIn(present.ANSWER, self.destroyed(),
+                      "the question stayed on the screen after it was answered")
+
+    def test_a_failure_still_keeps_its_own_card(self):
+        """`failed` draws the "couldn't:" line under the answer id, so that
+        one must still be spared or it would be destroyed and recreated."""
+        self.p.result({"type": "result", "say": "hi", "show": "hi"})
+        self.a.ops.clear()
+        self.p.result({"type": "failed", "kind": "table", "message": "no"})
+        self.assertNotIn(present.ANSWER, self.destroyed(),
+                         "the failure line destroyed the card it was drawing")
+
+
 class TestPanels(unittest.TestCase):
     def setUp(self):
         self.a = FakeAdapter()
