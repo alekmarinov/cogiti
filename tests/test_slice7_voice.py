@@ -182,8 +182,16 @@ class TestNothingWasSaid(unittest.IsolatedAsyncioTestCase):
     def _session(self):
         from cogiti.session import Session
 
+        class NoFace:
+            """`output = None` used to be enough, because a dropped bare
+            answer returned in silence. It shakes now — a word discarded
+            without a sound is exactly what "it skipped my yes" looked like —
+            so the port has to be answerable even where nothing is drawn."""
+            def not_for_me(self): pass
+            def awake(self, on): pass
+
         class Brain:
-            output = None            # no face in this test; heard() is optional
+            output = NoFace()
 
             def __init__(self):
                 self.asked = []

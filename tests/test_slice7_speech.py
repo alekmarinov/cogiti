@@ -208,6 +208,55 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class TestAQuestionAnsweredByVoice(Base):
+    """The path that was broken everywhere except in the tests.
+
+    The speech adapter has one reader loop:
+
+        _read_events -> await _dispatch -> await on_final -> await heard
+
+    `heard` used to await the whole turn, so a turn that stopped to ask a
+    question blocked the only thing that could read the answer. Every confirm
+    on the appliance timed out and the "yes" was then discarded as
+    meaningless — "one word seems to be skipped". Not a single question in its
+    trace had ever been answered.
+
+    The existing confirm tests all call `answer()` from a second task and
+    never touch the reader, which is exactly why they stayed green.
+    """
+
+    async def test_a_yes_spoken_after_the_question_reaches_it(self):
+        sys.path.insert(0, HERE)
+        from test_slice5_fastpath import FakeCogiti, FakeDecision, command
+        from cogiti import providers, session as session_mod
+        providers.load_all()
+
+        c = FakeCogiti(
+            {"software update": FakeDecision("update", verdict="confirm")},
+            {"update": command("update", speak="Updating.",
+                               confirm="Shall I install the updates?")})
+        sess = session_mod.Session(c)
+
+        # Two utterances, one reader. The gap has to be long enough that the
+        # turn has reached its question before the answer is spoken — which is
+        # what a person does, and what the loop could not survive.
+        await self.listen(
+            {"steps": [
+                {"emit": {"type": "final", "text": "software update", "ms": 500}},
+                # Long enough that the turn has reached its question before the
+                # answer is spoken. That is what a person does, and it is the
+                # gap the reader loop could not survive.
+                {"wait_ms": 600},
+                {"emit": {"type": "final", "text": "yes", "ms": 200}},
+                {"wait_ms": 4000}]},
+            on_final=lambda text, ms: sess.heard(text))
+
+        got = await self.drain(lambda: [i for i, _ in c.ran] == ["update"],
+                               timeout=8.0)
+        self.assertTrue(got, "the spoken yes never reached the question: "
+                             "ran=%r" % (c.ran,))
+
+
 class TestSessionByVoice(unittest.IsolatedAsyncioTestCase):
     """The loop driven by speech events rather than by typing."""
 

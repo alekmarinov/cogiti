@@ -617,7 +617,26 @@ class Session:
             # its own is not a turn because it only means anything against a
             # question, and there is not one. Silence is what a person gets
             # for agreeing with nobody.
+            #
+            # **Not silence, though — a shake, and a line in the log.**
+            #
+            # Dropped without a sound this is indistinguishable from a device
+            # that did not hear, and that is exactly what it looked like from
+            # in front of one: "one word seems to be skipped". Worse for
+            # anybody trying to find out why, it left no evidence: `heard`
+            # returns here before anything is traced, so an appliance whose
+            # entire log contains no answered question and no discarded one
+            # cannot tell you which of those it is.
+            #
+            # A shake, because the person who said it is owed the same "I
+            # heard you and did nothing" the room already gets. And a line,
+            # because the next person to ask why will have the same nothing
+            # to look at that I did.
+            print("(bare %r with no question pending)" % text[:40],
+                  file=sys.stderr, flush=True)
+            self.cogiti.output.not_for_me()
             return None
+
         return await self.utterance(text)
 
     # ------------------------------------------------------------ acting --
